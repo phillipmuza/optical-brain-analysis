@@ -5,3 +5,9 @@ __pycache__/
 # Pipeline outputs (generated next to input data, not part of the repo)
 downsampled/
 registration_dir/
+
+# Claude Code local settings (machine-specific)
+.claude/
+
+# Local dev venv
+.venv/
