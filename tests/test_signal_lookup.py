@@ -91,12 +91,12 @@ def test_hemispheres_sum_to_whole_for_every_region(run_pipeline, channel_dir):
     assert right[REGION_B] == 16 and REGION_B not in left.index
 
 
-@pytest.mark.xfail(strict=True, reason="decode_region_counts merges volumes.csv whose 'id' and "
-                     "'structure_id_path' columns collide with structures.csv; pandas renames "
-                     "them id_x/id_y so the whole-brain decoded CSV has no plain 'id' column")
 def test_decoding_joins_shipped_structures_csv(run_pipeline, channel_dir, structures_csv):
     run_pipeline(cap=200.0)
     decoded = pd.read_csv(channel_dir / "decoded_region_counts.csv")
+    # volumes.csv shares id/structure_id_path with structures.csv; the merge must not
+    # suffix-collide them into id_x/id_y
+    assert "id" in decoded.columns and "id_x" not in decoded.columns
     counted = decoded[decoded.Signal_Pixel_Count.notna()]
     assert set(counted["id"]) == {REGION_A, REGION_B}
     structures = pd.read_csv(structures_csv)
