@@ -1,0 +1,29 @@
+# Configuration file for image slicing
+# Specify the base directory containing all folders with images
+home_directory: "C:/path/to/images"
+
+# Configure slicing parameters for each folder
+folder_configs:
+  folder1:
+    start: 10
+    end: 50
+    step: 2  # Take every 2nd slice
+    
+  folder2:
+    start: 0
+    end: 30
+    # step defaults to 1 if not specified
+    
+  folder3:
+    start: 5
+    # end: null means use all slices from start to end of volume
+    
+  experiment_data:
+    start: 15
+    end: 45
+    step: 1
+    
+  control_group:
+    start: 0
+    end: 100
+    step: 5  # Take every 5th slice 

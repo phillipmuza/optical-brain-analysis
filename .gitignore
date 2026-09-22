@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pyo
+
+# Pipeline outputs (generated next to input data, not part of the repo)
+downsampled/
+registration_dir/
