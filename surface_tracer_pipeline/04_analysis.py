@@ -296,10 +296,13 @@ def main():
           .to_string(index=False, float_format=lambda v: f'{v:.4g}'))
 
     merged, correlations = ivis_comparison(df)
-    correlations.to_csv(os.path.join(OUT_DIR, 'native_vs_ivis_correlations.csv'), index=False)
-    merged.to_csv(os.path.join(OUT_DIR, 'native_vs_ivis_per_animal.csv'), index=False)
-    print(f'\nAgreement with IVIS ({merged["animal"].nunique()} animals with both):')
-    print(correlations.to_string(index=False, float_format=lambda v: f'{v:.3f}'))
+    if correlations is None:        # no second modality configured; figures() handles this too
+        print('skipping the IVIS correlation outputs and figures')
+    else:
+        correlations.to_csv(os.path.join(OUT_DIR, 'native_vs_ivis_correlations.csv'), index=False)
+        merged.to_csv(os.path.join(OUT_DIR, 'native_vs_ivis_per_animal.csv'), index=False)
+        print(f'\nAgreement with IVIS ({merged["animal"].nunique()} animals with both):')
+        print(correlations.to_string(index=False, float_format=lambda v: f'{v:.3f}'))
 
     figures(df, profiles, centres, merged, correlations, anova_table, posthoc)
 
