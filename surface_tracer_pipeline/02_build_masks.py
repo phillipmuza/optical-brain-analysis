@@ -256,7 +256,7 @@ def main():
                      'threshold_otsu': thresholds['otsu'], 'volume_mm3': float(mask.sum()) * VOXEL_MM3})
         print(f'{animal}: volume {rows[-1]["volume_mm3"]:.0f} mm3, {time.time() - t0:.0f} s', flush=True)
         del image, mask
-    pd.DataFrame(rows).to_csv(os.path.join(HERE, 'mask_summary.csv'), index=False)
+    pd.DataFrame(rows).to_csv(os.path.join(MASK_DIR, 'mask_summary.csv'), index=False)
     print(f'\nwrote {len(animals)} masks to {MASK_DIR} in {(time.time() - start) / 60:.1f} min')
 
 

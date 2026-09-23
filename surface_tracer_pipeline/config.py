@@ -60,6 +60,12 @@ FIG_DIR = os.path.join(RESULTS_DIR, 'figures')
 OUT_DIR = os.path.join(RESULTS_DIR, 'outputs')
 QC_DIR = os.path.join(RESULTS_DIR, 'qc')
 
+# Created up front so every step can write its first file immediately. Scripts also
+# makedirs before use, but 01_check_wraparound's main() writes its QC csv before the
+# only makedirs call it has (inside figure()), which crashes on a fresh results dir.
+for _dir in (RESULTS_DIR, MASK_DIR, DEPTH_DIR, FIG_DIR, OUT_DIR, QC_DIR):
+    os.makedirs(_dir, exist_ok=True)
+
 # --- derived (do not edit) ---------------------------------------------------------------------
 VOXEL_MM = VOXEL_UM / 1000
 VOXEL_MM3 = VOXEL_MM ** 3
