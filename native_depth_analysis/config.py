@@ -29,6 +29,7 @@ import time
 import pandas as pd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(HERE)
 RESULTS_ROOT = os.path.join(HERE, 'results')
 
 # --- constants: the same for every cohort ------------------------------------------------------
@@ -74,13 +75,14 @@ COHORTS = {
         'data_dir': r'E:\tracer_uptake\wt_mice\new_analysis_0926',
         'data_map': r'E:\tracer_uptake\wt_mice\data_map.csv',
         'second_modality_csv': r'E:\tracer_uptake\wt_mice\ivis_raw_data\ex_vivo\brain_data.csv',
-        # Step 05 only. threshold_summary.csv sits next to the sibling project's scripts; ATLAS_DIR
-        # and atlas_space_images.OUT_DIR were Python constants in that project and their values were
-        # never visible from this repository, so both paths below are inferences to be corrected
-        # against it (E:\tracer_uptake is inferred from DATA_DIR above).
-        'atlas_annotation': r'E:\tracer_uptake\NS24122_intensity\atlas\annotation.tiff',  # TODO(confirm)
-        'atlas_space_dir': r'E:\tracer_uptake\NS24122_intensity\atlas_space',             # TODO(confirm)
-        'threshold_summary': r'E:\tracer_uptake\NS24122_intensity\threshold_summary.csv',# TODO(confirm)
+        # Step 05 only. ATLAS_DIR in fixed_threshold_intensity.py, i.e. the brainglobe install of
+        # config.ATLAS (the _v1.2 suffix is part of the installed directory name). The other two are
+        # written by the sibling folder's own scripts: atlas_space_images.OUT_DIR is its atlas_space,
+        # and fixed_threshold_intensity writes its threshold table next to itself. Both are generated
+        # there and are not in the repository.
+        'atlas_annotation': r'C:\Users\skgtpm1\.brainglobe\perens_lsfm_mouse_20um_v1.2\annotation.tiff',
+        'atlas_space_dir': os.path.join(REPO_ROOT, 'NS24122_intensity', 'atlas_space'),
+        'threshold_summary': os.path.join(REPO_ROOT, 'NS24122_intensity', 'threshold_summary.csv'),
         'mask_channel_is_tracer': 'FITC',
         'groups': [
             {'name': 'Vehicle', 'label': 'Vehicle', 'color': '#7f7f7f'},
