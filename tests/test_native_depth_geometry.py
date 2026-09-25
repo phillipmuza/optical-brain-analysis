@@ -170,9 +170,9 @@ class TestConfigCohortSelection:
         data_dir, data_map, animals = synthetic_cohort_fixture
         config.select('synthetic')
         assert config.COHORT == 'synthetic'
-        assert config.GROUP_ORDER == ['Vehicle', 'Drug_10mg', 'Drug_30mg']
+        assert config.GROUP_ORDER == ['Vehicle', 'Medetomidine', 'K/X']
         assert config.REFERENCE_GROUP == 'Vehicle'
-        assert config.CONTRASTS == [('Drug_10mg', 'Vehicle'), ('Drug_30mg', 'Vehicle')]
+        assert config.CONTRASTS == [('Medetomidine', 'Vehicle'), ('K/X', 'Vehicle')]
         assert config.animals() == animals
 
     def test_results_are_namespaced_per_cohort(self, monkeypatch, synthetic_cohort_fixture):

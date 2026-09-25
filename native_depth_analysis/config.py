@@ -89,8 +89,10 @@ COHORTS = {
     },
 
     # TODO(confirm) - the values marked below are the ones not yet seen; the rest come from the
-    # cohort directory tree. validate() fails loudly on a wrong path or a group name that does not
-    # match the data map, so a first run reports these rather than mis-analysing quietly.
+    # cohort directory tree. The group names are the anaesthetic conditions as they appear in the
+    # data map's treatment column, with isoflurane as the control. validate() fails loudly on a
+    # wrong path or a group name that does not match the data map, so a first run reports these
+    # rather than mis-analysing quietly.
     'anaesthetic': {
         'data_dir': r'D:\anaesthetic_experiments\cleared_brains_new_analysis',
         'data_map': r'D:\anaesthetic_experiments\cleared_brains_new_analysis\data_map.csv',  # TODO(confirm)
@@ -99,10 +101,10 @@ COHORTS = {
         'atlas_space_dir': r'D:\anaesthetic_experiments\atlas_space',               # TODO(confirm)
         'threshold_summary': r'D:\anaesthetic_experiments\threshold_summary.csv',   # TODO(confirm)
         'mask_channel_is_tracer': 'FITC',
-        'groups': [                                   # TODO(confirm): the exact data-map strings
-            {'name': 'Isoflurane', 'label': 'Iso', 'color': '#7f7f7f'},
-            {'name': 'Medetomidine', 'label': 'Med', 'color': '#4C72B0'},
-            {'name': 'KX', 'label': 'K/X', 'color': '#C1666B'},
+        'groups': [
+            {'name': 'Isoflurane', 'label': 'Isoflurane', 'color': '#7f7f7f'},
+            {'name': 'Medetomidine', 'label': 'Medetomidine', 'color': '#4C72B0'},
+            {'name': 'K/X', 'label': 'K/X', 'color': '#C1666B'},
         ],
         'reference_group': 'Isoflurane',
         'exclude_animals': [],                        # TODO(confirm)

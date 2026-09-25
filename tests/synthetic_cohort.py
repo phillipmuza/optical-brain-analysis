@@ -71,7 +71,7 @@ def synthetic_image(animal_index, tracer_index, seed=0):
     return image
 
 
-DEFAULT_GROUPS = (("Vehicle", 2), ("Drug_10mg", 2), ("Drug_30mg", 2))
+DEFAULT_GROUPS = (("Vehicle", 2), ("Medetomidine", 2), ("K/X", 2))
 
 
 def build_cohort(root, groups=DEFAULT_GROUPS, seed=0):
