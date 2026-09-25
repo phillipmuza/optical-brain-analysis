@@ -10,13 +10,6 @@ registration_dir/
 # and QC figures. Written under the package by default; NATIVE_DEPTH_RESULTS moves them elsewhere.
 native_depth_analysis/results/
 
-# NS24122_intensity writes generated data next to its own scripts: the per-animal atlas-space
-# volumes, the threshold table, and its cache/QC output. Code is committed there, data is not.
-NS24122_intensity/atlas_space/
-NS24122_intensity/cache*/
-NS24122_intensity/qc/
-NS24122_intensity/threshold_summary*.csv
-
 # Claude Code local settings (machine-specific)
 .claude/
 
