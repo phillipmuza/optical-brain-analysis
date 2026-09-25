@@ -66,11 +66,12 @@ animal; if not, set `second_modality_csv: None` for that cohort and that section
 
 ## Configuring it
 
-Everything dataset-specific is the `COHORTS` dictionary in `config.py`. A cohort is:
+Everything dataset-specific is the `DATASET` dictionary at the top of `config.py`. Point it at a
+directory of animals, a data map and your groups:
 
 ```python
-'anaesthetic': {
-    'data_dir':            r'D:\anaesthetic_experiments\cleared_brains_new_analysis',
+DATASET = {
+    'name':                'anaesthetic',
     'data_map':            r'...\data_map.csv',
     'second_modality_csv': r'...\ivis.csv',          # or None; step 04 then skips the cross-check
     'atlas_annotation':    r'...\annotation.tiff',   # step 05 only
@@ -94,20 +95,19 @@ NaN bars. `reference_group` is what every contrast is tested against, and it dif
 (Vehicle for the drug series, Isoflurane for the anaesthetic one). The label and colour are only for
 figures.
 
-Select the cohort on any script:
+Select it by editing that dictionary. One dataset at a time: to run another, edit `DATASET`, or keep
+a copy of `config.py` per dataset. `config.py` also carries the anaesthetic series as
+`ANAESTHETIC_DATASET`, an example of the other shape - three groups whose names are the anaesthetic
+conditions, isoflurane as the control, everything else identical - so switching is a copy-paste of
+that block.
 
-```
-python 03_depth_profiles.py --cohort anaesthetic
-NATIVE_DEPTH_COHORT=anaesthetic python 03_depth_profiles.py     # same thing
-```
-
-Without either, `DEFAULT_COHORT` is used. Each script calls `config.select()`, then `config.validate()`
+Every script resolves the dictionary once when it imports `config`, then calls `config.validate()`:
 - which fails with a list of problems before any work starts, and prints the cohort census (how many
 animals per group) when it passes. Read that census: it is the difference between "the analysis ran"
 and "the analysis ran on the animals I think it did".
 
-Results are namespaced per cohort: `results/<cohort>/{masks,depth,figures,outputs,qc}`. This is not
-tidiness - animal ids repeat across cohorts (`an17` exists in both), so two cohorts sharing a results
+Results are namespaced per dataset: `results/<name>/{masks,depth,figures,outputs,qc}`. This is not
+tidiness - animal ids repeat across datasets (`an17` exists in both), so two datasets sharing a results
 directory would half-overwrite each other and produce a plausible figure mixing them. Set
 `NATIVE_DEPTH_RESULTS` to one exact directory to override, which is how you point step 04 at results
 computed earlier.
@@ -152,8 +152,8 @@ python 05_atlas_space.py                 # optional, atlas-space volumes; needs 
 python 06_atlas_maps.py                  # optional, atlas-space figures; needs 05
 ```
 
-Add `--cohort NAME` to any of them (or set `NATIVE_DEPTH_COHORT`) to run a dataset other than the
-default. Outputs land in `results/<cohort>/`.
+Add `--qc ANIMAL` to any of the first three to check one animal before committing to the cohort.
+Outputs land in `results/<name>/`.
 
 ### 1. `01_check_wraparound.py`
 
@@ -271,10 +271,7 @@ computed from atlas space, and 01-04 run with no atlas at all.
 ## What is deliberately not here
 
 The registration and region-based work - regional cluster tests, the per-region intensity tables, the
-notebooks that explore them - lives in `../NS24122_intensity/`. Steps 05 and 06 here were ported from
-it so that this pipeline no longer depends on another folder's paths, constants or cache; what stayed
-behind is the analysis this pipeline exists to avoid, measuring signal per atlas region.
-
-Two notes in that folder record the reasoning and the problems it ran into
-(`native_space_surface_analysis.md`, `registration_and_mask_issues.md`); the README above states the
-decisions this pipeline took in response.
+notebooks that explore them - is not part of this repository. Steps 05 and 06 were ported from it so
+that this pipeline depends on nothing outside itself: what was left behind is the analysis this
+pipeline exists to avoid, measuring signal per atlas region, along with its own cohort constants and
+cache. `git log` has it if a specific number needs tracing back.

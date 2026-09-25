@@ -34,9 +34,9 @@ import config
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-# Every value this script needs comes from config.<name>, and config.select() resolves those in
-# main() before any work starts. Nothing may be snapshotted here at import time, and no function
-# may take one as a default argument: both would freeze whichever cohort was selected first.
+# Every value this script needs comes from config.<name>, resolved by config.resolve() when config is
+# imported. Nothing may be snapshotted here at import time, and no function may take one as a
+# default argument: both would freeze the dataset that was configured first.
 
 
 # pingouin's output column names, and what this version of pingouin might call them instead. Only
@@ -59,7 +59,7 @@ def load():
     excluded = [a for a in listed if a in config.EXCLUDE_ANIMALS]
     animals = [a for a in listed if a not in excluded]
     if excluded:
-        print(f'note: ignoring {excluded}: excluded for cohort {config.COHORT}\n')
+        print(f'note: ignoring {excluded}: excluded for {config.DATASET_NAME}\n')
     rows, profiles = [], {}
     for animal in animals:
         data = np.load(os.path.join(config.DEPTH_DIR, f'{animal}.npz'), allow_pickle=True)
@@ -350,17 +350,17 @@ def check_depth_provenance():
             continue
         with np.load(os.path.join(config.DEPTH_DIR, name), allow_pickle=True) as data:
             recorded = str(data['provenance']) if 'provenance' in data else ''
-            cohort = str(data['cohort']) if 'cohort' in data else 'unrecorded'
+            dataset = str(data['dataset']) if 'dataset' in data else 'unrecorded'
         if not recorded:
             unknown.append(name[:-4])
         elif recorded != mine:
-            stale.append(f'{name[:-4]}: cohort {cohort}, fingerprint {recorded}')
+            stale.append(f'{name[:-4]}: dataset {dataset}, fingerprint {recorded}')
     if stale:
         raise SystemExit(f'{len(stale)} depth profile(s) in {config.DEPTH_DIR} were written under a '
-                         f'different configuration (this is cohort {config.COHORT}, fingerprint '
+                         f'different configuration (this is dataset {config.DATASET_NAME}, fingerprint '
                          f'{mine}):\n  - ' + '\n  - '.join(stale) +
-                         f'\nPoint --cohort at the right cohort, or delete {config.DEPTH_DIR} and '
-                         f're-run 03_depth_profiles.py.')
+                         f'\nPoint DATASET in config.py at the right dataset, or delete '
+                         f'{config.DEPTH_DIR} and re-run 03_depth_profiles.py.')
     if unknown:
         print(f'warning: {len(unknown)} depth profile(s) carry no provenance and may predate this '
               f'configuration: {unknown}. Re-run 03_depth_profiles.py to be certain.')
@@ -368,9 +368,7 @@ def check_depth_provenance():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--cohort', help='cohort from config.COHORTS (default: $NATIVE_DEPTH_COHORT)')
     args = parser.parse_args()
-    config.select(args.cohort)
     for line in config.validate():
         print(line)
     print(config.describe(), '\n', flush=True)

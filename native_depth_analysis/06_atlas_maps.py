@@ -29,8 +29,7 @@ Outputs (figures/):
                                   drawn and the dose/reference ratio underneath
   coronal_profile.png             integrated signal per coronal plane, hindbrain -> olfactory bulb
 
-Run:  python 06_atlas_maps.py            # cohort from config / $NATIVE_DEPTH_COHORT
-      python 06_atlas_maps.py --cohort anaesthetic
+Run:  python 06_atlas_maps.py            # the dataset in config.py
 """
 import argparse
 import os
@@ -245,25 +244,23 @@ def coronal_profile(signal, covered, groups, brain, compartment_masks):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--cohort', help='cohort from config.COHORTS (default: $NATIVE_DEPTH_COHORT)')
     args = parser.parse_args()
-    config.select(args.cohort)
     for line in config.validate():
         print(line)
     print(config.describe(), '\n', flush=True)
 
     if not os.path.isfile(config.THRESHOLD_SUMMARY) or not os.path.isdir(config.ATLAS_SPACE_DIR):
         raise SystemExit(
-            f'this cohort has no atlas-space volumes yet, and this stage needs them.\n'
+            f'this dataset has no atlas-space volumes yet, and this stage needs them.\n'
             f'  expected  {config.ATLAS_SPACE_DIR}/*.npz and {config.THRESHOLD_SUMMARY}\n'
-            f'Run step 05 first:  python 05_atlas_space.py --cohort {config.COHORT}\n'
+            f'Run step 05 first:  python 05_atlas_space.py\n'
             f'It needs the brainglobe annotation of {config.ATLAS} (config.ATLAS_ANNOTATION) and '
-            f'this cohort\'s brainreg registration_dir/. Steps 01-04 need no atlas and are '
+            f'this dataset\'s brainreg registration_dir/. Steps 01-04 need no atlas and are '
             f'unaffected - this stage is optional.')
     volumes = [f for f in os.listdir(config.ATLAS_SPACE_DIR) if f.endswith('.npz')]
     if not volumes:
         raise SystemExit(f'{config.ATLAS_SPACE_DIR} holds no .npz volumes; step 05 has not produced '
-                         f'anything for {config.COHORT}')
+                         f'anything for {config.DATASET_NAME}')
 
     os.makedirs(config.FIG_DIR, exist_ok=True)
     os.makedirs(config.OUT_DIR, exist_ok=True)

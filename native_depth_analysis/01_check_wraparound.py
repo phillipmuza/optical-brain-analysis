@@ -36,9 +36,9 @@ import config
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-# Every value this script needs comes from config.<name>, and config.select() resolves those in
-# main() before any work starts. Nothing may be snapshotted here at import time: a module-level
-# alias would freeze whichever cohort happened to be selected first.
+# Every value this script needs comes from config.<name>, resolved by config.resolve() when config is
+# imported. Nothing may be snapshotted here at import time: a module-level alias would freeze the
+# dataset that was configured first.
 
 
 def scan():
@@ -124,9 +124,7 @@ def figure(df):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--cohort', help='cohort from config.COHORTS (default: $NATIVE_DEPTH_COHORT)')
     args = parser.parse_args()
-    config.select(args.cohort)
     for line in config.validate():
         print(line)
     print(config.describe(), '\n', flush=True)

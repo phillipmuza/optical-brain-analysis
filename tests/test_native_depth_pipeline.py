@@ -25,9 +25,9 @@ depth_profiles = importlib.import_module('03_depth_profiles')
 analysis = importlib.import_module('04_analysis')
 
 
-def run_step(module, monkeypatch, cohort='synthetic'):
-    """Call a step's main() with a --cohort argument, as the command line would."""
-    monkeypatch.setattr(sys, 'argv', [module.__name__, '--cohort', cohort])
+def run_step(module, monkeypatch):
+    """Call a step's main() as the command line would."""
+    monkeypatch.setattr(sys, 'argv', [module.__name__])
     module.main()
 
 
@@ -51,7 +51,7 @@ def test_masks_are_written_per_animal_with_their_provenance(pipeline_results):
     written = sorted(f for f in os.listdir(pipeline_results['masks']) if f.endswith('.npz'))
     assert written == [f'{a}.npz' for a in animals]
     with np.load(os.path.join(pipeline_results['masks'], f'{animals[0]}.npz')) as data:
-        assert str(data['cohort']) == 'synthetic'
+        assert str(data['dataset']) == 'synthetic'
         assert str(data['provenance']) == config.provenance()
         assert tuple(int(s) for s in data['shape']) == (64, 64, 64)
         bitmask = np.unpackbits(data['packed']).astype(bool)
@@ -62,7 +62,7 @@ def test_depth_profiles_carry_the_bands_the_analysis_needs(pipeline_results):
     animals = pipeline_results['animals']
     path = os.path.join(pipeline_results['depth'], f'{animals[0]}.npz')
     with np.load(path, allow_pickle=True) as data:
-        assert str(data['cohort']) == 'synthetic'
+        assert str(data['dataset']) == 'synthetic'
         assert str(data['provenance']) == config.provenance()
         assert str(data['treatment']) == 'Vehicle'
         edges = data['edges']
@@ -103,7 +103,7 @@ def test_run_manifest_records_every_stage(pipeline_results, monkeypatch):
         manifest = json.load(handle)
     assert {'02_build_masks', '03_depth_profiles', '04_analysis'} <= set(manifest)
     for stage in manifest.values():
-        assert stage['cohort'] == 'synthetic'
+        assert stage['dataset'] == 'synthetic'
         assert stage['provenance'] == config.provenance()
         assert 'Vehicle' in stage['animals']
 
@@ -147,8 +147,8 @@ def test_an_excluded_animal_does_not_reach_the_statistics(pipeline_results, monk
     """
     import pandas as pd
     animal = pipeline_results['animals'][0]
-    config.COHORTS['synthetic']['exclude_animals'] = [animal]
-    config.select('synthetic')
+    config.DATASET['exclude_animals'] = [animal]
+    config.resolve()
 
     run_step(analysis, monkeypatch)
     printed = capsys.readouterr().out
@@ -171,8 +171,8 @@ def test_a_changed_exclusion_list_does_not_invalidate_older_profiles(pipeline_re
         fingerprint = str(data['provenance'])
     assert fingerprint == config.provenance()
 
-    config.COHORTS['synthetic']['exclude_animals'] = [animal]
-    config.select('synthetic')
+    config.DATASET['exclude_animals'] = [animal]
+    config.resolve()
     assert config.provenance() == fingerprint, 'cohort membership is not a measurement parameter'
 
     run_step(analysis, monkeypatch)          # runs rather than refusing
@@ -186,7 +186,8 @@ def test_a_cohort_entry_with_a_wrong_group_name_stops_before_any_work(synthetic_
     The other half of generalising: a typo in a group name must not reach the figures. It is the one
     mistake the code cannot detect later, because an empty group is a valid-looking DataFrame.
     """
-    config.COHORTS['synthetic']['groups'][2]['name'] = 'Drug_30'
+    config.DATASET['groups'][2]['name'] = 'Drug_30'
+    config.resolve()          # re-read the patched dict, as any script does when it imports config
     with pytest.raises(SystemExit) as raised:
         run_step(build_masks, monkeypatch)
     assert 'vanish from every figure' in str(raised.value)

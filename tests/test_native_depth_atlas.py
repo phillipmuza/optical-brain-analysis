@@ -26,8 +26,9 @@ atlas_space = importlib.import_module('05_atlas_space')
 atlas_maps = importlib.import_module('06_atlas_maps')
 
 
-def run_step(module, monkeypatch, cohort='synthetic'):
-    monkeypatch.setattr(sys, 'argv', [module.__name__, '--cohort', cohort])
+def run_step(module, monkeypatch):
+    """Call a step's main() as the command line would."""
+    monkeypatch.setattr(sys, 'argv', [module.__name__])
     module.main()
 
 
@@ -168,7 +169,7 @@ def test_thresholds_are_recomputed_independently(atlas_space_results):
 def test_saved_volumes_carry_their_cohort_and_provenance(atlas_space_results):
     for animal in atlas_space_results['animals']:
         with np.load(os.path.join(atlas_space_results['dir'], f'{animal}.npz')) as data:
-            assert str(data['cohort']) == 'synthetic'
+            assert str(data['dataset']) == 'synthetic'
             assert str(data['provenance']) == config.provenance()
             assert data['FITC'].dtype == np.uint16 and data['n'].dtype == np.uint8
             assert {'FITC', 'TxR', 'n', 'bg_FITC', 'bg_TxR'} <= set(data.files)
@@ -208,6 +209,7 @@ def test_atlas_stage_runs_once_05_has(synthetic_cohort_fixture, monkeypatch):
 
 
 def test_step_05_needs_the_atlas_annotation(synthetic_cohort_fixture, monkeypatch, tmp_path):
-    config.COHORTS['synthetic']['atlas_annotation'] = str(tmp_path / 'no_such_annotation.tiff')
+    config.DATASET['atlas_annotation'] = str(tmp_path / 'no_such_annotation.tiff')
+    config.resolve()
     with pytest.raises(SystemExit, match='needs the atlas annotation'):
         run_step(atlas_space, monkeypatch)

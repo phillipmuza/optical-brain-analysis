@@ -24,7 +24,7 @@ Run:
   python 02_build_masks.py --qc an4 an36 an16   # compare masks on a few animals, write figures
   python 02_build_masks.py                      # all animals -> masks/<animal>.npz (bit-packed)
 
-Add --cohort NAME to either to run a dataset other than the default (see config.py).
+Add --qc ANIMAL to either to check one animal before committing to the cohort (see config.py).
 """
 import argparse
 import os
@@ -40,9 +40,9 @@ import config
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-# Every value this script needs comes from config.<name>, and config.select() resolves those in
-# main() before any work starts. Nothing may be snapshotted here at import time, and no function
-# may take one as a default argument: both would freeze whichever cohort was selected first.
+# Every value this script needs comes from config.<name>, resolved by config.resolve() when config is
+# imported. Nothing may be snapshotted here at import time, and no function may take one as a
+# default argument: both would freeze the dataset that was configured first.
 
 
 def read_reference(animal):
@@ -223,9 +223,7 @@ def qc_figure(animal, image, thresholds, masks, metrics):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--qc', nargs='+', metavar='ANIMAL', help='compare masks on these animals and write figures')
-    parser.add_argument('--cohort', help='cohort from config.COHORTS (default: $NATIVE_DEPTH_COHORT)')
     args = parser.parse_args()
-    config.select(args.cohort)
     for line in config.validate():
         print(line)
     print(config.describe(), '\n', flush=True)
@@ -257,7 +255,7 @@ def main():
         np.savez_compressed(os.path.join(config.MASK_DIR, f'{animal}.npz'),
                             packed=np.packbits(mask), shape=np.array(mask.shape),
                             threshold=np.float32(thresholds['otsu']),
-                            cohort=config.COHORT, provenance=config.provenance())
+                            dataset=config.DATASET_NAME, provenance=config.provenance())
         rows.append({'animal_number': animal, 'treatment': data_map.loc[animal, 'treatment'],
                      'threshold_otsu': thresholds['otsu'], 'volume_mm3': float(mask.sum()) * config.VOXEL_MM3})
         print(f'{animal}: volume {rows[-1]["volume_mm3"]:.0f} mm3, {time.time() - t0:.0f} s', flush=True)

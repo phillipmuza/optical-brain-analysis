@@ -41,9 +41,9 @@ import config
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-# Every value this script needs comes from config.<name>, and config.select() resolves those in
-# main() before any work starts. Nothing may be snapshotted here at import time, and no function
-# may take one as a default argument: both would freeze whichever cohort was selected first.
+# Every value this script needs comes from config.<name>, resolved by config.resolve() when config is
+# imported. Nothing may be snapshotted here at import time, and no function may take one as a
+# default argument: both would freeze the dataset that was configured first.
 
 
 def load_mask(animal):
@@ -118,7 +118,7 @@ def animal_profile(animal):
     n_bins = len(edges) - 1
     result = {'edges': edges, 'mask_volume_mm3': float(mask.sum()) * config.VOXEL_MM3,
               'envelope_volume_mm3': float(envelope.sum()) * config.VOXEL_MM3,
-              'cohort': config.COHORT, 'provenance': config.provenance()}
+              'dataset': config.DATASET_NAME, 'provenance': config.provenance()}
 
     for tracer, folder in config.CHANNELS.items():
         raw = tifffile.imread(config.image_path(animal, f'{folder}.tif'))
@@ -226,9 +226,7 @@ def qc(animal):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--qc', metavar='ANIMAL', help='check one animal and write a figure')
-    parser.add_argument('--cohort', help='cohort from config.COHORTS (default: $NATIVE_DEPTH_COHORT)')
     args = parser.parse_args()
-    config.select(args.cohort)
     for line in config.validate():
         print(line)
     print(config.describe(), '\n', flush=True)
@@ -247,11 +245,11 @@ def main():
     excluded = [a for a in listed if a in config.EXCLUDE_ANIMALS]
     animals = [a for a in listed if a not in excluded]
     if excluded:
-        print(f'note: ignoring {excluded}: excluded for cohort {config.COHORT}. '
+        print(f'note: ignoring {excluded}: excluded for {config.DATASET_NAME}. '
               f'Delete their masks in {config.MASK_DIR} if that is not what you want.\n')
     missing = [a for a in config.animals() if a not in animals]
     if missing:
-        print(f'no mask for {missing} - run 02_build_masks.py for this cohort first\n')
+        print(f'no mask for {missing} - run 02_build_masks.py for this dataset first\n')
     start = time.time()
     for animal in animals:
         t0 = time.time()

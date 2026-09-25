@@ -1,9 +1,9 @@
 """
-A synthetic cohort, small enough to run in seconds, used by the native-depth tests.
+A synthetic dataset, small enough to run in seconds, used by the native-depth tests.
 
-The point of one cohort per dataset is that a new dataset is a config entry and nothing else. This
-builds exactly that: a data directory, a data map, three groups, two tracers, and a config COHORTS
-entry pointing at them - all fabricated, all with hand-known geometry.
+The point of one dict per dataset is that a new dataset is that dict and nothing else. This builds
+exactly that: a data directory, a data map, three groups, two tracers, and the config.DATASET value
+pointing at them - all fabricated, all with hand-known geometry.
 
 The image is shaped like the real ones: dark mounting medium, dimmer tissue, and a bright rim of
 tracer at the brain surface, with a little signal beyond the rim so the deep compartment is not
@@ -156,10 +156,11 @@ def build_cohort(root, groups=DEFAULT_GROUPS, seed=0):
     return data_dir, data_map, animals
 
 
-def cohort_entry(data_dir, data_map, groups=DEFAULT_GROUPS, name='synthetic', atlas_annotation=None):
-    """The config.COHORTS value for a cohort built by build_cohort()."""
+def dataset_entry(data_dir, data_map, groups=DEFAULT_GROUPS, name='synthetic', atlas_annotation=None):
+    """The config.DATASET value for a dataset built by build_cohort()."""
     palette = ['#7f7f7f', '#4C72B0', '#C1666B', '#8ED081']
     entry = {
+        'name': name,
         'data_dir': str(data_dir),
         'data_map': str(data_map),
         'second_modality_csv': None,

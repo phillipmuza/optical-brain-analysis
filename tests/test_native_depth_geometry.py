@@ -162,53 +162,60 @@ class TestConfigCohortSelection:
         assert config.BANDS[config.DEEP_BAND] == (config.SURFACE_MM, float('inf'))
         assert config.band_name('surface_0', 0.3) == 'surface_0_300um'
 
-    def test_unknown_cohort_is_refused(self):
-        with pytest.raises(SystemExit, match='unknown cohort'):
-            config.select('no-such-cohort')
+    def test_resolve_picks_up_a_changed_dataset(self, monkeypatch):
+        """
+        The mechanism every other test here relies on: config.resolve() re-reads DATASET, which is why
+        no script may snapshot a config value at import time.
+        """
+        monkeypatch.setattr(config, 'DATASET', dict(config.DATASET, name='renamed',
+                                                    reference_group='Vehicle'))
+        assert config.resolve() == 'renamed'
+        assert config.RESULTS_DIR.endswith(os.path.join('results', 'renamed'))
 
-    def test_select_resolves_the_cohort_names(self, tmp_path, synthetic_cohort_fixture):
+    def test_resolve_gives_the_dataset_names(self, tmp_path, synthetic_cohort_fixture):
         data_dir, data_map, animals = synthetic_cohort_fixture
-        config.select('synthetic')
-        assert config.COHORT == 'synthetic'
+        config.resolve()
+        assert config.DATASET_NAME == 'synthetic'
         assert config.GROUP_ORDER == ['Vehicle', 'Medetomidine', 'K/X']
         assert config.REFERENCE_GROUP == 'Vehicle'
         assert config.CONTRASTS == [('Medetomidine', 'Vehicle'), ('K/X', 'Vehicle')]
         assert config.animals() == animals
 
-    def test_results_are_namespaced_per_cohort(self, monkeypatch, synthetic_cohort_fixture):
+    def test_results_are_namespaced_per_dataset(self, monkeypatch, synthetic_cohort_fixture):
         """
-        Two cohorts must never share a results directory: animal ids repeat between them, so a shared
+        Two datasets must never share a results directory: animal ids repeat between them, so a shared
         directory would half-overwrite and produce a figure mixing the two.
         """
         monkeypatch.delenv('NATIVE_DEPTH_RESULTS', raising=False)
-        config.select('synthetic')
-        synthetic = config.RESULTS_DIR
-        config.select('NS24122')
-        n24122 = config.RESULTS_DIR
-        assert synthetic.endswith(os.path.join('results', 'synthetic'))
-        assert n24122.endswith(os.path.join('results', 'NS24122'))
-        assert synthetic != n24122
-        assert os.path.dirname(synthetic) == os.path.dirname(n24122)
+        first = config.resolve()
+        first_dir = config.RESULTS_DIR
+        monkeypatch.setattr(config, 'DATASET', dict(config.DATASET, name='another-dataset'))
+        second = config.resolve()
+        second_dir = config.RESULTS_DIR
+        assert first != second
+        assert first_dir.endswith(os.path.join('results', first))
+        assert second_dir.endswith(os.path.join('results', second))
+        assert os.path.dirname(first_dir) == os.path.dirname(second_dir)
 
     def test_validate_rejects_a_group_name_that_is_not_in_the_data_map(self, tmp_path, synthetic_cohort_fixture):
         data_dir, data_map, animals = synthetic_cohort_fixture
-        config.COHORTS['synthetic']['groups'][1]['name'] = 'Drug_10mg_THAT_DOES_NOT_EXIST'
+        config.DATASET['groups'][1]['name'] = 'Drug_10mg_THAT_DOES_NOT_EXIST'
         with pytest.raises(SystemExit, match='vanish from every figure'):
-            config.select('synthetic')
+            config.resolve()
             config.validate()
 
     def test_validate_rejects_an_empty_group(self, tmp_path, synthetic_cohort_fixture):
         data_dir, data_map, animals = synthetic_cohort_fixture
-        config.COHORTS['synthetic']['exclude_animals'] = ['an2', 'an1']     # all of Vehicle
+        config.DATASET['exclude_animals'] = ['an2', 'an1']     # all of Vehicle
         with pytest.raises(SystemExit, match='no animals'):
-            config.select('synthetic')
+            config.resolve()
             config.validate()
 
     def test_validate_rejects_a_missing_image(self, tmp_path, synthetic_cohort_fixture):
         data_dir, data_map, animals = synthetic_cohort_fixture
         (Path(data_dir) / animals[0] / 'downsampled' / 'txr.tif').unlink()
         with pytest.raises(SystemExit, match='missing downsampled/txr.tif'):
-            config.select('synthetic')
+            config.resolve()
             config.validate()
 
     def test_validate_reports_a_data_map_row_with_no_folder(self, synthetic_cohort_fixture):
@@ -217,15 +224,15 @@ class TestConfigCohortSelection:
         table = pd.read_csv(data_map)
         table.loc[len(table)] = {'blinded_number': 'an999', 'treatment': 'Vehicle'}
         table.to_csv(data_map, index=False)
-        config.select('synthetic')
+        config.resolve()
         lines = config.validate()
         assert any('an999' in line and 'warning' in line for line in lines)
 
     def test_provenance_changes_with_a_parameter_but_not_with_a_path(self, synthetic_cohort_fixture):
-        config.select('synthetic')
+        config.resolve()
         before = config.provenance()
-        config.COHORTS['synthetic']['data_dir'] = 'elsewhere'
-        config.select('synthetic')
+        config.DATASET['data_dir'] = 'elsewhere'
+        config.resolve()
         assert config.provenance() == before, 'moving a data directory is not a measurement change'
         config.K_MAD = config.K_MAD + 1
         try:

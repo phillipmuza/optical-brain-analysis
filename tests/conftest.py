@@ -28,21 +28,22 @@ for _path in (TESTS_DIR, NATIVE_DEPTH_DIR):
 @pytest.fixture
 def synthetic_cohort_fixture(tmp_path, monkeypatch):
     """
-    Register a fabricated cohort with config.COHORTS, and undo it afterwards.
+    Point config.DATASET at a fabricated dataset, and undo it afterwards.
 
     Results are redirected to tmp_path too, so a test run never writes masks or figures into the
-    package directory - which is what the default results/<cohort> path would otherwise do.
+    package directory - which is what the default results/<name> path would otherwise do.
     """
     import synthetic_cohort
     import config
 
     data_dir, data_map, animals = synthetic_cohort.build_cohort(tmp_path)
     annotation = synthetic_cohort.write_atlas_annotation(tmp_path)
-    monkeypatch.setitem(config.COHORTS, 'synthetic',
-                        synthetic_cohort.cohort_entry(data_dir, data_map, atlas_annotation=annotation))
     monkeypatch.setenv('NATIVE_DEPTH_RESULTS', str(tmp_path / 'results'))
-    monkeypatch.delenv('NATIVE_DEPTH_COHORT', raising=False)
+    monkeypatch.setattr(config, 'DATASET',
+                        synthetic_cohort.dataset_entry(data_dir, data_map, atlas_annotation=annotation))
+    config.resolve()
     yield data_dir, data_map, animals
+    config.resolve()          # put the real dataset back for anything that runs after this fixture
 
 # Two real atlas IDs standing in for "region A" (cortex-like block) and "region B".
 REGION_A = 9

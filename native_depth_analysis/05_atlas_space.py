@@ -2,10 +2,10 @@ r"""
 The inputs stage 06 needs, produced from this cohort's own registration: raw tracer intensity on the
 atlas grid, and one detection threshold per animal x tracer.
 
-This is a port of the two things that used to live outside this repository - the resampling in
-NS24122_intensity/atlas_space_images.py and the per-animal threshold in
-NS24122_intensity/fixed_threshold_intensity.py - reduced to exactly what the atlas-space stage
-consumes, so that stage no longer depends on another folder's constants or its cache.
+This is a port of the two things that used to live outside this repository - the resampling in the
+intensity arm's atlas_space_images.py and the per-animal threshold in its
+fixed_threshold_intensity.py, both since removed from the repository (git log has them) - reduced to
+exactly what the atlas-space stage consumes, so that stage depends on nothing but this folder.
 
 Why resample at all: the native-space analysis (03, 04) measures each animal against its own surface,
 which is right for *how much* tracer there is. To see *where* it is, animals have to share a grid, so
@@ -36,8 +36,8 @@ Two deliberate differences from the code this was ported from:
     the older per-slice pipeline wrote into <animal>/<tracer>/unsharp_image.tif, which this pipeline
     does not produce, so it would be a dependency on the very thing the native arm exists to avoid.
 
-Run:  python 05_atlas_space.py --cohort NS24122 --qc an4     # one animal, prints checks, writes a figure
-      python 05_atlas_space.py --cohort NS24122              # all animals -> results/<cohort>/atlas_space
+Run:  python 05_atlas_space.py --qc an4     # one animal, prints checks, writes a figure
+      python 05_atlas_space.py              # all animals -> results/<name>/atlas_space
 """
 import argparse
 import os
@@ -170,7 +170,7 @@ def save(animal, data):
     """One npz per animal. 06 reads exactly these keys, and the provenance guard reads the last two."""
     os.makedirs(config.ATLAS_SPACE_DIR, exist_ok=True)
     payload = {'n': np.clip(data['n'], 0, 255).astype(np.uint8),
-               'cohort': config.COHORT, 'provenance': config.provenance()}
+               'dataset': config.DATASET_NAME, 'provenance': config.provenance()}
     for tracer in config.CHANNELS:
         payload[tracer] = np.clip(data[tracer], 0, 65535).astype(np.uint16)
         payload[f'bg_{tracer}'] = data[f'bg_{tracer}']
@@ -241,9 +241,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--qc', metavar='ANIMAL', help='resample one animal and write a check figure')
     parser.add_argument('--bin', type=int, help=f'atlas voxels per output voxel (default {config.ATLAS_BIN})')
-    parser.add_argument('--cohort', help='cohort from config.COHORTS (default: $NATIVE_DEPTH_COHORT)')
     args = parser.parse_args()
-    config.select(args.cohort)
     for line in config.validate():
         print(line)
     print(config.describe(), '\n', flush=True)
@@ -285,7 +283,8 @@ def main():
           f'{(time.time() - start) / 60:.1f} min')
     print(f'thresholds: {summary}')
     print(f'manifest: {config.write_manifest("05_atlas_space", {"animals": len(animals), "bin": args.bin or config.ATLAS_BIN})}')
-    print('\nnow run 06_atlas_maps.py for this cohort')
+    print()
+    print('now run 06_atlas_maps.py for this dataset')
 
 
 if __name__ == '__main__':
