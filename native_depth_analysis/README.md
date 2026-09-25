@@ -1,7 +1,10 @@
-# Surface tracer pipeline
+# Native depth analysis
 
 Measures **how much CSF tracer reaches the brain surface**, from cleared light-sheet volumes, without
 an atlas and without any registration.
+
+Point the pipeline at a dataset by selecting a **cohort** - a directory of animals, a data map and a
+list of treatment groups - and nothing else in the code changes. See "Configuring it".
 
 Each animal is measured against **its own brain surface**, in its own image space. Signal is
 integrated in shells at a known depth below that surface, dorsal and ventral halves separately, and
@@ -59,27 +62,79 @@ You also need a data map (CSV) with one row per animal, giving an animal id colu
 column.
 
 A second modality (here IVIS) is optional. If you have one, step 4 will cross-validate against it per
-animal; if not, set `IVIS_CSV = None` and that section is skipped.
+animal; if not, set `second_modality_csv: None` for that cohort and that section is skipped.
 
 ## Configuring it
 
-Edit `config.py` and nothing else. The fields that always need attention:
+Everything dataset-specific is the `COHORTS` dictionary in `config.py`. A cohort is:
 
-| field | meaning |
-|---|---|
-| `DATA_DIR`, `DATA_MAP` | where the images and the animal table are |
-| `ANIMAL_COLUMN`, `TREATMENT_COLUMN` | the two columns to read from the data map |
-| `REFERENCE_IMAGE`, `CHANNELS` | which file makes the mask, which files are tracers |
-| `VOXEL_UM` | isotropic voxel size of those images |
-| `GROUP_ORDER`, `REFERENCE_GROUP` | groups, and which one everything is compared against |
-| `EXCLUDE_ANIMALS` | animals dropped everywhere |
-| `IVIS_CSV` | second modality, or `None` |
+```python
+'anaesthetic': {
+    'data_dir':            r'D:\anaesthetic_experiments\cleared_brains_new_analysis',
+    'data_map':            r'...\data_map.csv',
+    'second_modality_csv': r'...\ivis.csv',          # or None; step 04 then skips the cross-check
+    'atlas_annotation':    r'...\annotation.tiff',   # step 05 only
+    'atlas_space_dir':     r'...\atlas_space',       # step 05 only
+    'threshold_summary':   r'...\threshold_summary.csv',   # step 05 only
+    'mask_channel_is_tracer': 'FITC',                # see below; '' if the reference is its own channel
+    'groups': [
+        {'name': 'Isoflurane',   'label': 'Iso', 'color': '#7f7f7f'},
+        {'name': 'Medetomidine', 'label': 'Med', 'color': '#4C72B0'},
+        {'name': 'KX',           'label': 'K/X', 'color': '#C1666B'},
+    ],
+    'reference_group':  'Isoflurane',
+    'exclude_animals':  [],
+    'example_animal':   'an17',
+}
+```
 
-The analysis parameters (`K_MAD`, `SURFACE_MM`, closing radii, depth bins) have sensible defaults
-documented in the file; leave them unless you have a reason.
+`groups[].name` must match the `treatment` column of the data map **exactly** - a mismatch is the one
+mistake that would otherwise reach the statistics, so `validate()` stops on it rather than plotting
+NaN bars. `reference_group` is what every contrast is tested against, and it differs between cohorts
+(Vehicle for the drug series, Isoflurane for the anaesthetic one). The label and colour are only for
+figures.
 
-Results go to `results/` next to the scripts. Set the `SURFACE_TRACER_RESULTS` environment variable
-to write elsewhere, or to point step 4 at results computed earlier.
+Select the cohort on any script:
+
+```
+python 03_depth_profiles.py --cohort anaesthetic
+NATIVE_DEPTH_COHORT=anaesthetic python 03_depth_profiles.py     # same thing
+```
+
+Without either, `DEFAULT_COHORT` is used. Each script calls `config.select()`, then `config.validate()`
+- which fails with a list of problems before any work starts, and prints the cohort census (how many
+animals per group) when it passes. Read that census: it is the difference between "the analysis ran"
+and "the analysis ran on the animals I think it did".
+
+Results are namespaced per cohort: `results/<cohort>/{masks,depth,figures,outputs,qc}`. This is not
+tidiness - animal ids repeat across cohorts (`an17` exists in both), so two cohorts sharing a results
+directory would half-overwrite each other and produce a plausible figure mixing them. Set
+`NATIVE_DEPTH_RESULTS` to one exact directory to override, which is how you point step 04 at results
+computed earlier.
+
+### What this assumes
+
+These are constants, not per-cohort settings, because every cohort so far has shared them. A cohort
+that breaks one needs a new constant and a look at the step that uses it - not a new special case:
+
+- 20 um isotropic downsampled volumes, and the same acquisition settings across the cohort. The
+  comparison is of **absolute** intensity, so a cohort imaged on two different days with different
+  laser settings will report that difference as biology. Randomise groups across imaging days.
+- `brainreg --orientation asr`, so axis 1 runs dorsal -> ventral. Another orientation swaps the
+  dorsal and ventral halves silently.
+- `registration.tif` as the mask-building channel, one `fitc.tif`/`txr.tif` per tracer, one folder
+  per animal. `REFERENCE_IMAGE` and `CHANNELS` are the only handles on that layout.
+- The Perens LSFM mouse atlas (`perens_lsfm_mouse_20um`), 20 um, so its distances and the images'
+  distances are in the same units. `ATLAS_BIN` is the display binning (2 -> the 40 um grid).
+
+The analysis parameters (`K_MAD`, `SURFACE_MM`, closing radii, depth bins) also have defaults
+documented in the file; leave them unless you have a reason. `SURFACE_MM` is the single source for
+the surface/deep boundary - the band names (`surface_0_500um`, `deep_500um_plus`) are derived from it,
+so changing it changes the statistics and the labels together.
+
+`mask_channel_is_tracer` records whether the reference image is a copy of a tracer channel. In every
+cohort so far it is (a copy of FITC), which means the mask follows the tracer's own surface rim and
+"depth 0" is not independent of the signal - see "Things to keep in mind when reading the results".
 
 ## Running it
 
@@ -93,7 +148,11 @@ python 02_build_masks.py                 # ~45 min for 20 animals
 python 03_depth_profiles.py --qc an4     # ~5 min    check the envelope and the profile shape
 python 03_depth_profiles.py              # ~90 min for 20 animals
 python 04_analysis.py                    # seconds   statistics and figures
+python 05_atlas_maps.py                  # optional, atlas-space figures; needs the stage-05 inputs
 ```
+
+Add `--cohort NAME` to any of them (or set `NATIVE_DEPTH_COHORT`) to run a dataset other than the
+default. Outputs land in `results/<cohort>/`.
 
 ### 1. `01_check_wraparound.py`
 
@@ -178,8 +237,13 @@ Outputs in `outputs/`: `native_depth_per_animal.csv`, `native_depth_anova.csv`,
 
 ## What is deliberately not here
 
-All the atlas and region-based work — registration QC, atlas-space resampling, regional cluster
-tests, coronal compartment maps. Those live in `../NS24122_intensity/` and `../native_space_analysis/`
-alongside notes on the registration problems (`registration_and_mask_issues.md`) and the reasoning
-behind this design (`native_space_surface_analysis.md`). There is more to extract from that work;
-it is just not needed to reproduce this measurement.
+The registration and region-based work - registration QC, regional cluster tests - lives in
+`../NS24122_intensity/` and `../native_space_analysis/` alongside notes on the registration problems
+(`registration_and_mask_issues.md`) and the reasoning behind this design
+(`native_space_surface_analysis.md`).
+
+`05_atlas_maps.py` is the one atlas-dependent stage here, and only for **display** alignment. Its
+input, the per-animal atlas-space resampling, is still produced outside this repository
+(`../NS24122_intensity/atlas_space_images.py`) - so stage 05 reproduces for a cohort whose
+atlas-space volumes already exist, and not otherwise. Nothing else in the pipeline depends on it:
+01-04 run with no atlas at all.

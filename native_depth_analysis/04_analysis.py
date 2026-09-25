@@ -19,6 +19,7 @@ surface it is dominated by non-tissue voxels sitting far below the tissue backgr
 
 Run (after native_depth.py):  python native_depth_analysis.py
 """
+import argparse
 import itertools
 import os
 
@@ -33,17 +34,9 @@ import config
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-DEPTH_DIR = config.DEPTH_DIR
-FIG_DIR = config.FIG_DIR
-OUT_DIR = config.OUT_DIR
-IVIS_CSV = config.IVIS_CSV
-TRACERS = list(config.CHANNELS)
-SIDES = ['dorsal', 'ventral']
-TREATMENT_ORDER = config.GROUP_ORDER
-CONTRASTS = config.CONTRASTS
-GROUP_COLORS = config.GROUP_COLORS
-BANDS = {'surface_0_200um': (0.0, 0.2), 'surface_0_500um': (0.0, 0.5),
-         'deep_500um_plus': (0.5, np.inf), 'inside_total': (0.0, np.inf)}
+# Every value this script needs comes from config.<name>, and config.select() resolves those in
+# main() before any work starts. Nothing may be snapshotted here at import time, and no function
+# may take one as a default argument: both would freeze whichever cohort was selected first.
 
 
 def short(treatment):
@@ -52,21 +45,22 @@ def short(treatment):
 
 def load():
     """Per animal x tracer x side: band sums, from the depth histograms."""
-    animals = sorted([f[:-4] for f in os.listdir(DEPTH_DIR) if f.endswith('.npz')], key=config.sort_key)
+    animals = sorted([f[:-4] for f in os.listdir(config.DEPTH_DIR) if f.endswith('.npz')],
+                     key=config.sort_key)
     rows, profiles = [], {}
     for animal in animals:
-        data = np.load(os.path.join(DEPTH_DIR, f'{animal}.npz'), allow_pickle=True)
+        data = np.load(os.path.join(config.DEPTH_DIR, f'{animal}.npz'), allow_pickle=True)
         edges = data['edges']
         centres = (edges[:-1] + edges[1:]) / 2
         treatment = str(data['treatment'])
-        for tracer, side in itertools.product(TRACERS, SIDES):
+        for tracer, side in itertools.product(config.CHANNELS, config.SIDES):
             signal = data[f'{tracer}_{side}_sum_in_mask']
             voxels = data[f'{tracer}_{side}_n_voxels']
             profiles[(animal, tracer, side)] = (centres, signal)
             row = {'animal': animal, 'treatment': treatment, 'tracer': tracer, 'side': side,
                    'background': float(data[f'{tracer}_background']),
                    'threshold': float(data[f'{tracer}_threshold'])}
-            for name, (lo, hi) in BANDS.items():
+            for name, (lo, hi) in config.BANDS.items():
                 sel = (centres >= lo) & (centres < hi)
                 row[name] = float(signal[sel].sum())
                 row[f'{name}_voxels'] = float(voxels[sel].sum())
@@ -100,7 +94,7 @@ def anova_and_posthoc(df, measures):
     from statsmodels.formula.api import ols
 
     anova_rows, posthoc = [], []
-    for tracer, side, measure in itertools.product(TRACERS, SIDES, measures):
+    for tracer, side, measure in itertools.product(config.CHANNELS, config.SIDES, measures):
         d = (df[(df['tracer'] == tracer) & (df['side'] == side)][['animal', 'treatment', measure]]
              .rename(columns={measure: 'value'}))
         table = sm.stats.anova_lm(ols('value ~ C(treatment)', data=d).fit(), typ=2)
@@ -109,7 +103,8 @@ def anova_and_posthoc(df, measures):
                            'F': float(table['F'].iloc[0]), 'p_anova': float(table['PR(>F)'].iloc[0]),
                            'df_between': float(table['df'].iloc[0]), 'df_resid': float(table['df'].iloc[1]),
                            'eta_sq': ss_between / ss_total if ss_total else np.nan,
-                           **{short(t): d.loc[d['treatment'] == t, 'value'].mean() for t in TREATMENT_ORDER}})
+                           **{config.short(t): d.loc[d['treatment'] == t, 'value'].mean()
+                              for t in config.GROUP_ORDER}})
         pairs = pg.pairwise_tukey(data=d, dv='value', between='treatment')
         pairs.insert(0, 'measure', measure)
         pairs.insert(0, 'region', side)
@@ -118,8 +113,10 @@ def anova_and_posthoc(df, measures):
     return pd.DataFrame(anova_rows), pd.concat(posthoc, ignore_index=True)
 
 
-def tukey_p(posthoc, tracer, side, measure, treatment, reference=config.REFERENCE_GROUP):
+def tukey_p(posthoc, tracer, side, measure, treatment, reference=None):
     """The Tukey p for one pair, whichever way round pingouin listed it."""
+    if reference is None:
+        reference = config.REFERENCE_GROUP
     d = posthoc[(posthoc['tracer'] == tracer) & (posthoc['region'] == side) & (posthoc['measure'] == measure)]
     hit = d[((d['A'] == treatment) & (d['B'] == reference)) | ((d['A'] == reference) & (d['B'] == treatment))]
     return float(hit['p-tukey'].iloc[0]) if len(hit) else np.nan
@@ -129,53 +126,68 @@ def ivis_comparison(df):
     """
     Per-animal agreement with the second modality, using the surface band.
 
-    Skipped (returns None) when config.IVIS_CSV is None or missing, which is the normal case for a
-    dataset without a second measurement. Everything else in this script still runs.
+    Skipped (returns None) when the cohort has no second modality configured, which is the normal case
+    for a dataset without one. Everything else in this script still runs.
+
+    Column names and the tissue -> side values come from config, because a second modality that is
+    only *equivalent* to IVIS will not use IVIS's headings.
     """
-    if not IVIS_CSV or not os.path.exists(IVIS_CSV):
+    if not config.SECOND_MODALITY_CSV or not os.path.exists(config.SECOND_MODALITY_CSV):
         print('no second-modality table configured; skipping the cross-validation')
         return None, None
-    ivis = pd.read_csv(IVIS_CSV, encoding='utf-8-sig')
-    ivis = ivis[ivis['tissue'].isin(['dorsal_brain', 'ventral_brain'])].copy()
-    ivis['side'] = ivis['tissue'].str.replace('_brain', '', regex=False)
-    animal_column = config.IVIS_ANIMAL_COLUMN
-    merged = df.merge(ivis[[animal_column, 'tracer', 'side', 'avg_radiant_efficiency', 'total_radiant_efficiency']],
-                      left_on=['animal', 'tracer', 'side'], right_on=[animal_column, 'tracer', 'side'], how='inner')
+    columns = config.SECOND_MODALITY_COLUMNS
+    tissue_to_side = config.SECOND_MODALITY_TISSUE_TO_SIDE
+    ivis = pd.read_csv(config.SECOND_MODALITY_CSV, encoding='utf-8-sig')
+    missing = [c for c in columns.values() if c not in ivis.columns]
+    if missing:
+        raise SystemExit(f'{config.SECOND_MODALITY_CSV} has no column {missing}; it has '
+                         f'{list(ivis.columns)}. Set SECOND_MODALITY_COLUMNS in config.py to match.')
+    ivis = ivis[ivis[columns['tissue']].isin(tissue_to_side)].copy()
+    ivis['side'] = ivis[columns['tissue']].map(tissue_to_side)
+    ivis['native_tracer'] = ivis[columns['tracer']].astype(str)
+    merged = df.merge(ivis[[columns['animal'], 'native_tracer', 'side', columns['total'], columns['average']]],
+                      left_on=['animal', 'tracer', 'side'],
+                      right_on=[columns['animal'], 'native_tracer', 'side'], how='inner')
+    if merged.empty:
+        raise SystemExit(f'no animal in the depth profiles matches the second-modality table '
+                         f'{config.SECOND_MODALITY_CSV}: check the animal ids in column '
+                         f'{columns["animal"]!r} and the tracer names in {columns["tracer"]!r} '
+                         f'(configured channels: {list(config.CHANNELS)})')
     rows = []
-    for tracer, side in itertools.product(TRACERS, SIDES):
+    for tracer, side in itertools.product(config.CHANNELS, config.SIDES):
         d = merged[(merged['tracer'] == tracer) & (merged['side'] == side)]
-        for measure, ivis_measure in (('surface_0_500um', 'total_radiant_efficiency'),
-                                      ('surface_per_voxel', 'avg_radiant_efficiency')):
-            rho, p = stats.spearmanr(d[measure], d[ivis_measure])
-            rows.append({'tracer': tracer, 'side': side, 'native_measure': measure,
-                         'ivis_measure': ivis_measure.replace('_radiant_efficiency', ''),
+        for native_measure, column_key in config.SECOND_MODALITY_PAIRS:
+            rho, p = stats.spearmanr(d[native_measure], d[columns[column_key]])
+            rows.append({'tracer': tracer, 'side': side, 'native_measure': native_measure,
+                         'ivis_measure': column_key,
                          'n': len(d), 'spearman_rho': rho, 'p': p})
     return merged, pd.DataFrame(rows)
 
 
 def figures(df, profiles, centres, merged, correlations, anova_table, posthoc):
-    os.makedirs(FIG_DIR, exist_ok=True)
+    os.makedirs(config.FIG_DIR, exist_ok=True)
     groups = {t: sorted(df.loc[df['treatment'] == t, 'animal'].unique(), key=config.sort_key)
-              for t in TREATMENT_ORDER}
+              for t in config.GROUP_ORDER}
 
     # 1. depth profiles by group
     inside = centres >= 0          # negative-depth bins are empty by construction (see the QC note)
-    fig, axes = plt.subplots(len(TRACERS), len(SIDES), figsize=(13, 9), sharex=True)
-    for (r, tracer), (c, side) in itertools.product(enumerate(TRACERS), enumerate(SIDES)):
+    fig, axes = plt.subplots(len(config.CHANNELS), len(config.SIDES), figsize=(13, 9), sharex=True)
+    for (r, tracer), (c, side) in itertools.product(enumerate(config.CHANNELS), enumerate(config.SIDES)):
         ax = axes[r, c]
         top = 0.0
-        for treatment in TREATMENT_ORDER:
+        for treatment in config.GROUP_ORDER:
             stack = np.array([profiles[(a, tracer, side)][1][inside] for a in groups[treatment]])
             mean, sem = stack.mean(axis=0), stack.std(axis=0, ddof=1) / np.sqrt(len(stack))
-            ax.plot(centres[inside], mean, color=GROUP_COLORS[treatment], linewidth=2, label=short(treatment))
+            ax.plot(centres[inside], mean, color=config.GROUP_COLORS[treatment], linewidth=2,
+                    label=config.short(treatment))
             ax.fill_between(centres[inside], np.maximum(mean - sem, 1), mean + sem,
-                            color=GROUP_COLORS[treatment], alpha=0.2, linewidth=0)
+                            color=config.GROUP_COLORS[treatment], alpha=0.2, linewidth=0)
             top = max(top, float((mean + sem).max()))
         ax.set_yscale('log')
         ax.set_ylim(top / 3e3, top * 1.6)
         ax.set_xlim(0, 2.0)
         ax.set_title(f'{tracer}, {side}', fontsize=11, loc='left')
-        if r == len(TRACERS) - 1:
+        if r == len(config.CHANNELS) - 1:
             ax.set_xlabel('depth below the brain surface (mm)', fontsize=10)
         if c == 0:
             ax.set_ylabel('integrated tracer signal', fontsize=10)
@@ -185,43 +197,48 @@ def figures(df, profiles, centres, merged, correlations, anova_table, posthoc):
     fig.suptitle('Tracer signal vs depth below each animal\'s own brain surface (group mean ± SEM)',
                  x=0.01, ha='left', fontsize=13)
     plt.tight_layout(rect=(0, 0, 1, 0.96))
-    plt.savefig(os.path.join(FIG_DIR, 'native_depth_profiles.png'), dpi=120)
+    plt.savefig(os.path.join(config.FIG_DIR, 'native_depth_profiles.png'), dpi=120)
     plt.close(fig)
 
     # 2. headline: the two compartments, both as absolute integrated signal, with ANOVA and Tukey
-    fig, axes = plt.subplots(2, 4, figsize=(18, 8.5))
+    compartments = ((config.SURFACE_BAND,
+                     f'Integrated signal from the brain surface to {config.SURFACE_MM:g} mm depth'),
+                    (config.DEEP_BAND,
+                     f'Integrated signal deeper than {config.SURFACE_MM:g} mm'))
+    panels = list(itertools.product(config.CHANNELS, config.SIDES))
+    fig, axes = plt.subplots(len(compartments), len(panels), figsize=(4.5 * len(panels), 8.5), squeeze=False)
     rng = np.random.default_rng(0)
-    for row, measure, label in ((0, 'surface_0_500um', 'Integrated signal from brain surface to 0.5 mm depth'),
-                                (1, 'deep_500um_plus', 'Integrated signal deeper than 0.5 mm')):
-        for col, (tracer, side) in enumerate(itertools.product(TRACERS, SIDES)):
+    for row, (measure, label) in enumerate(compartments):
+        for col, (tracer, side) in enumerate(panels):
             ax = axes[row, col]
             d = df[(df['tracer'] == tracer) & (df['side'] == side)].set_index('animal')[measure]
             top = 0.0
-            for x, treatment in enumerate(TREATMENT_ORDER):
+            for x, treatment in enumerate(config.GROUP_ORDER):
                 v = d[groups[treatment]]
-                ax.bar(x, v.mean(), width=0.6, color=GROUP_COLORS[treatment], alpha=0.3,
+                ax.bar(x, v.mean(), width=0.6, color=config.GROUP_COLORS[treatment], alpha=0.3,
                        yerr=v.sem(), capsize=4, error_kw={'elinewidth': 1.2, 'ecolor': '#444444'})
-                ax.scatter(x + rng.uniform(-0.13, 0.13, len(v)), v, s=45, color=GROUP_COLORS[treatment],
+                ax.scatter(x + rng.uniform(-0.13, 0.13, len(v)), v, s=45,
+                           color=config.GROUP_COLORS[treatment],
                            edgecolor='black', linewidth=0.7, zorder=3)
                 top = max(top, float(v.max()))
-            # Tukey brackets for each dose against Vehicle, and the ANOVA p in the title
+            # Tukey brackets for each dose against the reference group, and the ANOVA p in the title
             step = top * 0.09
-            for k, (treatment, reference) in enumerate(CONTRASTS):
+            for k, (treatment, reference) in enumerate(config.CONTRASTS):
                 p = tukey_p(posthoc, tracer, side, measure, treatment, reference)
                 if not np.isfinite(p):
                     continue
                 y = top * 1.06 + k * step
-                x0, x1 = TREATMENT_ORDER.index(reference), TREATMENT_ORDER.index(treatment)
+                x0, x1 = config.GROUP_ORDER.index(reference), config.GROUP_ORDER.index(treatment)
                 ax.plot([x0, x0, x1, x1], [y, y + step * 0.18, y + step * 0.18, y], color='#444444', linewidth=1)
                 mark = '*' if p < 0.05 else f'p = {p:.3f}'
                 ax.text((x0 + x1) / 2, y + step * 0.22, mark, ha='center', va='bottom',
                         fontsize=12 if mark == '*' else 8.5, color='#222222')
-            ax.set_ylim(0, top * 1.06 + len(CONTRASTS) * step + step * 0.6)
+            ax.set_ylim(0, top * 1.06 + len(config.CONTRASTS) * step + step * 0.6)
             anova = anova_table[(anova_table['tracer'] == tracer) & (anova_table['region'] == side)
                                 & (anova_table['measure'] == measure)]
             p_anova = float(anova['p_anova'].iloc[0]) if len(anova) else np.nan
-            ax.set_xticks(range(len(TREATMENT_ORDER)))
-            ax.set_xticklabels([short(t) for t in TREATMENT_ORDER], fontsize=9)
+            ax.set_xticks(range(len(config.GROUP_ORDER)))
+            ax.set_xticklabels([config.short(t) for t in config.GROUP_ORDER], fontsize=9)
             ax.set_title(f'{tracer}, {side}\nANOVA p = {p_anova:.3f}', fontsize=10, loc='left')
             if col == 0:
                 ax.set_ylabel(label, fontsize=10)
@@ -229,35 +246,39 @@ def figures(df, profiles, centres, merged, correlations, anova_table, posthoc):
     fig.suptitle('Integrated tracer signal by compartment: one-way ANOVA of treatment, Tukey post-hoc',
                  x=0.01, ha='left', fontsize=13)
     plt.tight_layout(rect=(0, 0, 1, 0.96))
-    plt.savefig(os.path.join(FIG_DIR, 'native_depth_headline.png'), dpi=120)
+    plt.savefig(os.path.join(config.FIG_DIR, 'native_depth_headline.png'), dpi=120)
     plt.close(fig)
 
     if merged is None:            # no second modality configured
-        print(f'wrote 2 figures to {FIG_DIR}')
+        print(f'wrote 2 figures to {config.FIG_DIR}')
         return
 
-    # 3 and 4. agreement with IVIS, against its total and its average radiant efficiency.
-    # The two IVIS measures differ only by ROI area, so the matched light-sheet quantity differs too:
+    # 3 and 4. agreement with the second modality, against its total and its average.
+    # The two columns differ only by ROI area, so the matched light-sheet quantity differs too:
     # an integral for the total, a per-voxel average for the average.
-    for native_measure, ivis_measure, ivis_label, filename in (
-            ('surface_0_500um', 'total_radiant_efficiency', 'IVIS total radiant efficiency', 'native_vs_ivis.png'),
-            ('surface_per_voxel', 'avg_radiant_efficiency', 'IVIS average radiant efficiency',
-             'native_vs_ivis_average.png')):
-        fig, axes = plt.subplots(len(TRACERS), len(SIDES), figsize=(13, 9))
-        for (r, tracer), (c, side) in itertools.product(enumerate(TRACERS), enumerate(SIDES)):
+    modality = config.SECOND_MODALITY_NAME
+    columns = config.SECOND_MODALITY_COLUMNS
+    for native_measure, column_key, filename in (
+            (config.SURFACE_BAND, 'total', 'native_vs_ivis.png'),
+            ('surface_per_voxel', 'average', 'native_vs_ivis_average.png')):
+        ivis_measure = columns[column_key]
+        ivis_label = f'{modality} {column_key}'
+        fig, axes = plt.subplots(len(config.CHANNELS), len(config.SIDES), figsize=(13, 9))
+        for (r, tracer), (c, side) in itertools.product(enumerate(config.CHANNELS), enumerate(config.SIDES)):
             ax = axes[r, c]
             d = merged[(merged['tracer'] == tracer) & (merged['side'] == side)]
-            for treatment in TREATMENT_ORDER:
+            for treatment in config.GROUP_ORDER:
                 g = d[d['treatment'] == treatment]
-                ax.scatter(g[native_measure], g[ivis_measure], s=55, color=GROUP_COLORS[treatment],
-                           edgecolor='black', linewidth=0.7, label=short(treatment), zorder=3)
+                ax.scatter(g[native_measure], g[ivis_measure], s=55, color=config.GROUP_COLORS[treatment],
+                           edgecolor='black', linewidth=0.7, label=config.short(treatment), zorder=3)
             for _, row in d.iterrows():
                 ax.annotate(row['animal'], (row[native_measure], row[ivis_measure]),
                             fontsize=6, color='#555555', xytext=(3, 3), textcoords='offset points')
             stat = correlations[(correlations['tracer'] == tracer) & (correlations['side'] == side)
                                 & (correlations['native_measure'] == native_measure)].iloc[0]
-            label = ('native-space surface signal (0-0.5 mm)' if native_measure == 'surface_0_500um'
-                     else 'native-space surface signal per voxel (0-0.5 mm)')
+            label = (f'native-space surface signal (0-{config.SURFACE_MM * 1000:.0f} um)'
+                     if native_measure == config.SURFACE_BAND
+                     else f'native-space surface signal per voxel (0-{config.SURFACE_MM * 1000:.0f} um)')
             ax.set_xlabel(label, fontsize=9)
             ax.set_ylabel(ivis_label, fontsize=9)
             ax.set_title(f'{tracer}, {side}: Spearman ρ = {stat["spearman_rho"]:+.2f} '
@@ -265,43 +286,53 @@ def figures(df, profiles, centres, merged, correlations, anova_table, posthoc):
             if r == 0 and c == 0:
                 ax.legend(frameon=False, fontsize=8)
             ax.spines[['top', 'right']].set_visible(False)
-        fig.suptitle(f'Native-space surface signal vs {ivis_label.lower()}, per animal',
+        fig.suptitle(f'Native-space surface signal vs {ivis_label}, per animal',
                      x=0.01, ha='left', fontsize=13)
         plt.tight_layout(rect=(0, 0, 1, 0.96))
-        plt.savefig(os.path.join(FIG_DIR, filename), dpi=120)
+        plt.savefig(os.path.join(config.FIG_DIR, filename), dpi=120)
         plt.close(fig)
-    print(f'wrote 4 figures to {FIG_DIR}')
+    print(f'wrote 4 figures to {config.FIG_DIR}')
 
 
 def main():
-    os.makedirs(OUT_DIR, exist_ok=True)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--cohort', help='cohort from config.COHORTS (default: $NATIVE_DEPTH_COHORT)')
+    args = parser.parse_args()
+    config.select(args.cohort)
+    for line in config.validate():
+        print(line)
+    print(config.describe(), '\n', flush=True)
+
+    os.makedirs(config.OUT_DIR, exist_ok=True)
     df, profiles, centres = load()
-    df.to_csv(os.path.join(OUT_DIR, 'native_depth_per_animal.csv'), index=False)
+    df.to_csv(os.path.join(config.OUT_DIR, 'native_depth_per_animal.csv'), index=False)
     print(f'{df["animal"].nunique()} animals')
     print('\nGroup means of the background and threshold (a technical check):')
     print(df.groupby(['treatment', 'tracer'])[['background', 'threshold']].mean()
-          .reindex(TREATMENT_ORDER, level='treatment').round(1).to_string())
+          .reindex(config.GROUP_ORDER, level='treatment').round(1).to_string())
 
-    measures = ['surface_0_500um', 'deep_500um_plus', 'surface_0_200um', 'inside_total',
+    measures = [config.SURFACE_BAND, config.DEEP_BAND, config.SHALLOW_BAND, config.INSIDE_BAND,
                 'surface_per_voxel', 'fraction_deep']
     anova_table, posthoc = anova_and_posthoc(df, measures)
-    anova_table.to_csv(os.path.join(OUT_DIR, 'native_depth_anova.csv'), index=False)
-    posthoc.to_csv(os.path.join(OUT_DIR, 'native_depth_posthoc_tukey.csv'), index=False)
+    anova_table.to_csv(os.path.join(config.OUT_DIR, 'native_depth_anova.csv'), index=False)
+    posthoc.to_csv(os.path.join(config.OUT_DIR, 'native_depth_posthoc_tukey.csv'), index=False)
     pd.set_option('display.width', 240)
-    print('\nOne-way ANOVA of treatment, per tracer x region (same procedure as the IVIS analysis):')
+    print('\nOne-way ANOVA of treatment, per tracer x region (same procedure as the '
+          f'{config.SECOND_MODALITY_NAME} analysis):')
     print(anova_table.to_string(index=False, float_format=lambda v: f'{v:.4g}'))
     print('\nTukey post-hoc for the two compartment measures:')
-    print(posthoc[posthoc['measure'].isin(['surface_0_500um', 'deep_500um_plus'])]
+    print(posthoc[posthoc['measure'].isin([config.SURFACE_BAND, config.DEEP_BAND])]
           [['tracer', 'region', 'measure', 'A', 'B', 'mean(A)', 'mean(B)', 'diff', 'T', 'p-tukey', 'hedges']]
           .to_string(index=False, float_format=lambda v: f'{v:.4g}'))
 
     merged, correlations = ivis_comparison(df)
     if correlations is None:        # no second modality configured; figures() handles this too
-        print('skipping the IVIS correlation outputs and figures')
+        print('skipping the second-modality correlation outputs and figures')
     else:
-        correlations.to_csv(os.path.join(OUT_DIR, 'native_vs_ivis_correlations.csv'), index=False)
-        merged.to_csv(os.path.join(OUT_DIR, 'native_vs_ivis_per_animal.csv'), index=False)
-        print(f'\nAgreement with IVIS ({merged["animal"].nunique()} animals with both):')
+        correlations.to_csv(os.path.join(config.OUT_DIR, 'native_vs_ivis_correlations.csv'), index=False)
+        merged.to_csv(os.path.join(config.OUT_DIR, 'native_vs_ivis_per_animal.csv'), index=False)
+        print(f'\nAgreement with {config.SECOND_MODALITY_NAME} '
+              f'({merged["animal"].nunique()} animals with both):')
         print(correlations.to_string(index=False, float_format=lambda v: f'{v:.3f}'))
 
     figures(df, profiles, centres, merged, correlations, anova_table, posthoc)

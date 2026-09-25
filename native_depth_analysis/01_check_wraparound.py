@@ -22,6 +22,7 @@ for a particular measurement.
 
 Run:  python check_wraparound.py
 """
+import argparse
 import os
 
 import numpy as np
@@ -35,13 +36,9 @@ import config
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-PARENT = config.DATA_DIR
-QC_DIR = config.QC_DIR
-CHANNELS = {'reference': config.REFERENCE_IMAGE,
-            **{name: f'{stem}.tif' for name, stem in config.CHANNELS.items()}}
-TREATMENT_ORDER = config.GROUP_ORDER
-GROUP_COLORS = config.GROUP_COLORS
-EXAMPLE_ANIMAL = config.EXAMPLE_ANIMAL
+# Every value this script needs comes from config.<name>, and config.select() resolves those in
+# main() before any work starts. Nothing may be snapshotted here at import time: a module-level
+# alias would freeze whichever cohort happened to be selected first.
 
 
 def scan():
@@ -50,8 +47,8 @@ def scan():
     animals = config.animals()
     rows = []
     for animal in animals:
-        for channel, filename in CHANNELS.items():
-            path = os.path.join(PARENT, animal, 'downsampled', filename)
+        for channel, filename in config.channel_files().items():
+            path = config.image_path(animal, filename)
             if not os.path.exists(path):
                 continue
             volume = tifffile.imread(path)
@@ -74,7 +71,7 @@ def figure(df):
     ax = axes[0]
     animals = sorted(df['animal'].unique(), key=config.sort_key)
     width = 0.27
-    for k, channel in enumerate(CHANNELS):
+    for k, channel in enumerate(config.channel_files()):
         d = df[df['channel'] == channel].set_index('animal').reindex(animals)
         ax.bar(np.arange(len(animals)) + (k - 1) * width, d['n_wrapped'].fillna(0) + 0.5, width=width,
                label=channel, edgecolor='#333333', linewidth=0.4)
@@ -82,7 +79,7 @@ def figure(df):
     ax.set_xticks(np.arange(len(animals)))
     ax.set_xticklabels(animals, rotation=90, fontsize=8)
     for tick, animal in zip(ax.get_xticklabels(), animals):
-        tick.set_color(GROUP_COLORS[df.loc[df['animal'] == animal, 'treatment'].iloc[0]])
+        tick.set_color(config.GROUP_COLORS[df.loc[df['animal'] == animal, 'treatment'].iloc[0]])
     ax.set_ylabel('wrapped voxels (log, 0.5 = none)', fontsize=10)
     ax.set_title('Voxels above 32,767 that wrapped negative', fontsize=11, loc='left')
     ax.legend(frameon=False, fontsize=9)
@@ -90,9 +87,9 @@ def figure(df):
 
     # how close each animal runs to the 16-bit ceiling
     ax = axes[1]
-    for treatment in TREATMENT_ORDER:
+    for treatment in config.GROUP_ORDER:
         d = df[(df['treatment'] == treatment) & (df['channel'] != 'reference')]
-        ax.scatter(d['max'], d['n_wrapped'] + 0.5, s=45, color=GROUP_COLORS[treatment],
+        ax.scatter(d['max'], d['n_wrapped'] + 0.5, s=45, color=config.GROUP_COLORS[treatment],
                    edgecolor='black', linewidth=0.6, label=config.short(treatment))
     ax.axvline(32767, color='#C1666B', linestyle='--', linewidth=1.2)
     ax.text(32767, ax.get_ylim()[1], ' int16 ceiling', color='#C1666B', fontsize=9, va='top')
@@ -105,29 +102,37 @@ def figure(df):
 
     # where they are, in the worst animal
     ax = axes[2]
-    first_channel = CHANNELS[list(config.CHANNELS)[0]]
-    volume = tifffile.imread(os.path.join(PARENT, EXAMPLE_ANIMAL, 'downsampled', first_channel))
+    first_channel = f'{config.CHANNELS[list(config.CHANNELS)[0]]}.tif'
+    volume = tifffile.imread(config.image_path(config.EXAMPLE_ANIMAL, first_channel))
     negative = volume < 0
     plane = int(np.argmax(negative.sum(axis=(1, 2)))) if negative.any() else volume.shape[0] // 2
     image = volume[plane].astype(np.float32)
     ax.imshow(image, cmap='gray', vmin=0, vmax=np.percentile(image[image > 0], 99.5), interpolation='nearest')
     ys, xs = np.nonzero(negative[plane])
     ax.scatter(xs, ys, s=90, facecolors='none', edgecolors='#66CCFF', linewidths=1.2)
-    ax.set_title(f'{EXAMPLE_ANIMAL}, plane {plane}: wrapped voxels circled', fontsize=11, loc='left')
+    ax.set_title(f'{config.EXAMPLE_ANIMAL}, plane {plane}: wrapped voxels circled', fontsize=11, loc='left')
     ax.set_axis_off()
 
     fig.suptitle('16-bit wraparound in the acquired stacks (signed int16, values above 32,767 stored negative)',
                  x=0.01, ha='left', fontsize=13)
     plt.tight_layout(rect=(0, 0, 1, 0.95))
-    os.makedirs(QC_DIR, exist_ok=True)
-    path = os.path.join(QC_DIR, 'int16_wraparound.png')
+    os.makedirs(config.QC_DIR, exist_ok=True)
+    path = os.path.join(config.QC_DIR, 'int16_wraparound.png')
     plt.savefig(path, dpi=120)
     print(f'wrote {path}')
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--cohort', help='cohort from config.COHORTS (default: $NATIVE_DEPTH_COHORT)')
+    args = parser.parse_args()
+    config.select(args.cohort)
+    for line in config.validate():
+        print(line)
+    print(config.describe(), '\n', flush=True)
+
     df = scan()
-    df.to_csv(os.path.join(QC_DIR, 'int16_wraparound.csv'), index=False)
+    df.to_csv(os.path.join(config.QC_DIR, 'int16_wraparound.csv'), index=False)
     pd.set_option('display.width', 220)
     affected = df[df['n_wrapped'] > 0]
     print(f'\n{affected["animal"].nunique()} of {df["animal"].nunique()} animals affected, '
@@ -137,7 +142,7 @@ def main():
           .to_string(index=False))
     print('\nby group (mean wrapped voxels per stack, tracer channels only):')
     print(df[df['channel'] != 'reference'].groupby(['treatment', 'channel'])['n_wrapped'].mean()
-          .unstack().reindex(TREATMENT_ORDER).round(1).to_string())
+          .unstack().reindex(config.GROUP_ORDER).round(1).to_string())
     print('\nestimated signal lost to wrapping, as a fraction of each stack\'s total (tracer channels):')
     tracer = df[df['channel'] != 'reference'].copy()
     tracer['lost_fraction_%'] = 100 * tracer['lost_signal_estimate'] / tracer['total_positive_signal']

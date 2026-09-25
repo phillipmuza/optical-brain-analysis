@@ -7,3 +7,8 @@ numpy>=1.21.0
 tifffile>=2021.11.2
 matplotlib>=3.4.0
 PyYAML>=5.4.0
+# native_depth_analysis: scipy for the distance transforms and Spearman, statsmodels + pingouin for
+# the ANOVA and Tukey post-hoc in 04_analysis.py
+scipy>=1.9.0
+statsmodels>=0.14.0
+pingouin>=0.5.3

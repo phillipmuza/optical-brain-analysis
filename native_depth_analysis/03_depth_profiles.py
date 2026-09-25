@@ -41,32 +41,27 @@ import config
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-PARENT = config.DATA_DIR
-MASK_DIR = config.MASK_DIR
-DEPTH_DIR = config.DEPTH_DIR
-QC_DIR = config.QC_DIR
-TRACER_DIRS = config.CHANNELS
-VOXEL_MM = config.VOXEL_MM
-ENVELOPE_CLOSING_VOX = config.ENVELOPE_CLOSING_VOX
-DEPTH_LO, DEPTH_HI, DEPTH_STEP = config.DEPTH_LO, config.DEPTH_HI, config.DEPTH_STEP
-K_MAD = config.K_MAD
-SLAB = config.SLAB
+# Every value this script needs comes from config.<name>, and config.select() resolves those in
+# main() before any work starts. Nothing may be snapshotted here at import time, and no function
+# may take one as a default argument: both would freeze whichever cohort was selected first.
 
 
 def load_mask(animal):
-    """The native-space brain mask built by improve_mask.py."""
-    data = np.load(os.path.join(MASK_DIR, f'{animal}.npz'))
+    """The native-space brain mask built by 02_build_masks.py."""
+    data = np.load(os.path.join(config.MASK_DIR, f'{animal}.npz'))
     shape = tuple(int(s) for s in data['shape'])
     return np.unpackbits(data['packed'])[:int(np.prod(shape))].reshape(shape).astype(bool)
 
 
-def outer_envelope(mask, closing_radius=ENVELOPE_CLOSING_VOX):
+def outer_envelope(mask, closing_radius=None):
     """
     The brain's outer surface: the mask with internal cavities and narrow clefts sealed.
 
     Closing is done with distance transforms rather than a ball structuring element, which is far
     cheaper at this radius, then holes are filled so that ventricles reaching the outside are closed.
     """
+    if closing_radius is None:
+        closing_radius = config.ENVELOPE_CLOSING_VOX
     pad = closing_radius + 2
     padded = np.pad(mask, pad)
     padded = ndimage.distance_transform_edt(~padded) <= closing_radius
@@ -80,7 +75,7 @@ def signed_depth(envelope):
     """Distance in mm from the envelope surface: positive inside the brain, negative outside."""
     inside = ndimage.distance_transform_edt(envelope).astype(np.float32)
     outside = ndimage.distance_transform_edt(~envelope).astype(np.float32)
-    return (inside - outside) * np.float32(VOXEL_MM)
+    return (inside - outside) * np.float32(config.VOXEL_MM)
 
 
 def dorsal_mask(envelope):
@@ -113,29 +108,30 @@ def animal_profile(animal):
     depth = signed_depth(envelope)
     dorsal = dorsal_mask(envelope)
 
-    edges = np.arange(DEPTH_LO, DEPTH_HI + DEPTH_STEP / 2, DEPTH_STEP, dtype=np.float32)
+    edges = np.arange(config.DEPTH_LO, config.DEPTH_HI + config.DEPTH_STEP / 2, config.DEPTH_STEP,
+                     dtype=np.float32)
     n_bins = len(edges) - 1
-    result = {'edges': edges, 'mask_volume_mm3': float(mask.sum()) * VOXEL_MM ** 3,
-              'envelope_volume_mm3': float(envelope.sum()) * VOXEL_MM ** 3}
+    result = {'edges': edges, 'mask_volume_mm3': float(mask.sum()) * config.VOXEL_MM3,
+              'envelope_volume_mm3': float(envelope.sum()) * config.VOXEL_MM3}
 
-    for tracer, folder in TRACER_DIRS.items():
-        raw = tifffile.imread(os.path.join(PARENT, animal, 'downsampled', f'{folder}.tif'))
+    for tracer, folder in config.CHANNELS.items():
+        raw = tifffile.imread(config.image_path(animal, f'{folder}.tif'))
         valid_tissue = mask & (raw >= 0)
         bg, sd = robust_background(raw[valid_tissue].astype(np.float64))
-        threshold = bg + K_MAD * sd
+        threshold = bg + config.K_MAD * sd
 
         counts = np.zeros(2 * n_bins)
         sums = np.zeros(2 * n_bins)
         counts_mask = np.zeros(2 * n_bins)
         sums_mask = np.zeros(2 * n_bins)
-        for z0 in range(0, mask.shape[0], SLAB):
-            z1 = min(z0 + SLAB, mask.shape[0])
+        for z0 in range(0, mask.shape[0], config.SLAB):
+            z1 = min(z0 + config.SLAB, mask.shape[0])
             d = depth[z0:z1]
             r = raw[z0:z1]
-            keep = (r >= 0) & (d >= DEPTH_LO) & (d < DEPTH_HI)
+            keep = (r >= 0) & (d >= config.DEPTH_LO) & (d < config.DEPTH_HI)
             if not keep.any():
                 continue
-            index = ((d - DEPTH_LO) / DEPTH_STEP).astype(np.int32)
+            index = ((d - config.DEPTH_LO) / config.DEPTH_STEP).astype(np.int32)
             index += np.where(dorsal[z0:z1], 0, n_bins)          # dorsal first, then ventral
             index = index[keep]
             above = (r[keep].astype(np.float32) - np.float32(bg))
@@ -169,7 +165,8 @@ def qc(animal):
     envelope = outer_envelope(mask)
     depth = signed_depth(envelope)
     dorsal = dorsal_mask(envelope)
-    print(f'{animal}: mask {mask.sum() * VOXEL_MM ** 3:.0f} mm3, envelope {envelope.sum() * VOXEL_MM ** 3:.0f} mm3 '
+    print(f'{animal}: mask {mask.sum() * config.VOXEL_MM3:.0f} mm3, '
+          f'envelope {envelope.sum() * config.VOXEL_MM3:.0f} mm3 '
           f'(+{100 * (envelope.sum() / mask.sum() - 1):.1f}%), {time.time() - t0:.0f} s')
     print(f'  depth inside the brain: max {depth.max():.2f} mm; outside: min {depth.min():.2f} mm')
     print(f'  dorsal half holds {100 * dorsal[envelope].mean():.0f}% of envelope voxels')
@@ -177,7 +174,7 @@ def qc(animal):
     profile = animal_profile(animal)
     edges = profile['edges']
     centres = (edges[:-1] + edges[1:]) / 2
-    for tracer in TRACER_DIRS:
+    for tracer in config.CHANNELS:
         total = sum(profile[f'{tracer}_{s}_sum_in_mask'].sum() for s in ('dorsal', 'ventral'))
         outside = sum(profile[f'{tracer}_{s}_sum_in_mask'][centres < 0].sum() for s in ('dorsal', 'ventral'))
         print(f'  {tracer}: background {profile[f"{tracer}_background"]:.0f}, '
@@ -196,22 +193,22 @@ def qc(animal):
                  fontsize=10, loc='left')
     ax.set_axis_off()
 
-    for ax, tracer in zip(axes[1:], TRACER_DIRS):
+    for ax, tracer in zip(axes[1:], config.CHANNELS):
         for side, colour in (('dorsal', '#4C72B0'), ('ventral', '#C1666B')):
             ax.plot(centres, profile[f'{tracer}_{side}_sum_in_mask'], color=colour, label=f'{side}, thresholded')
             ax.plot(centres, profile[f'{tracer}_{side}_sum_above_bg'], color=colour, linestyle=':', alpha=0.7,
                     label=f'{side}, all voxels')
         ax.axvline(0, color='black', linewidth=1)
         ax.set_yscale('symlog', linthresh=1e5)
-        ax.set_xlim(DEPTH_LO, 2.0)
+        ax.set_xlim(config.DEPTH_LO, 2.0)
         ax.set_xlabel('signed depth below the brain surface (mm)', fontsize=10)
         ax.set_ylabel('integrated signal above background', fontsize=10)
         ax.set_title(f'{tracer}: where the signal sits', fontsize=10, loc='left')
         ax.legend(frameon=False, fontsize=8)
         ax.spines[['top', 'right']].set_visible(False)
     plt.tight_layout()
-    os.makedirs(QC_DIR, exist_ok=True)
-    path = os.path.join(QC_DIR, f'{animal}_native_depth.png')
+    os.makedirs(config.QC_DIR, exist_ok=True)
+    path = os.path.join(config.QC_DIR, f'{animal}_native_depth.png')
     plt.savefig(path, dpi=120)
     print(f'  wrote {path}')
 
@@ -219,23 +216,33 @@ def qc(animal):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--qc', metavar='ANIMAL', help='check one animal and write a figure')
+    parser.add_argument('--cohort', help='cohort from config.COHORTS (default: $NATIVE_DEPTH_COHORT)')
     args = parser.parse_args()
+    config.select(args.cohort)
+    for line in config.validate():
+        print(line)
+    print(config.describe(), '\n', flush=True)
 
     if args.qc:
         qc(args.qc)
         return
 
-    os.makedirs(DEPTH_DIR, exist_ok=True)
+    os.makedirs(config.DEPTH_DIR, exist_ok=True)
     data_map = config.load_data_map()
-    animals = sorted([f[:-4] for f in os.listdir(MASK_DIR) if f.endswith('.npz')], key=config.sort_key)
+    animals = sorted([f[:-4] for f in os.listdir(config.MASK_DIR) if f.endswith('.npz')],
+                     key=config.sort_key)
+    missing = [a for a in config.animals() if a not in animals]
+    if missing:
+        print(f'no mask for {missing} - run 02_build_masks.py for this cohort first\n')
     start = time.time()
     for animal in animals:
         t0 = time.time()
         profile = animal_profile(animal)
         profile['treatment'] = str(data_map.loc[animal, 'treatment'])
-        np.savez_compressed(os.path.join(DEPTH_DIR, f'{animal}.npz'), **profile)
+        np.savez_compressed(os.path.join(config.DEPTH_DIR, f'{animal}.npz'), **profile)
         print(f'{animal}: {time.time() - t0:.0f} s', flush=True)
-    print(f'\nwrote {len(animals)} depth profiles to {DEPTH_DIR} in {(time.time() - start) / 60:.1f} min')
+    print(f'\nwrote {len(animals)} depth profiles to {config.DEPTH_DIR} '
+          f'in {(time.time() - start) / 60:.1f} min')
 
 
 if __name__ == '__main__':

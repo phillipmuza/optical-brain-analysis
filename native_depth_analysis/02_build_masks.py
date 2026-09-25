@@ -38,19 +38,14 @@ import config
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-PARENT = config.DATA_DIR
-MASK_DIR = config.MASK_DIR
-QC_DIR = config.QC_DIR
-REGISTRATION_IMAGE = config.REFERENCE_IMAGE
-TRACER_DIRS = config.CHANNELS
-VOXEL_MM3 = config.VOXEL_MM3
-CLOSING_RADIUS_VOX = config.MASK_CLOSING_VOX
-SUBSAMPLE = config.SUBSAMPLE
+# Every value this script needs comes from config.<name>, and config.select() resolves those in
+# main() before any work starts. Nothing may be snapshotted here at import time, and no function
+# may take one as a default argument: both would freeze whichever cohort was selected first.
 
 
 def read_reference(animal):
     """The image the mask is built from (the registration channel, in the animal's own space)."""
-    return tifffile.imread(os.path.join(PARENT, animal, 'downsampled', REGISTRATION_IMAGE))
+    return tifffile.imread(config.image_path(animal, config.REFERENCE_IMAGE))
 
 
 def candidate_thresholds(image):
@@ -61,7 +56,7 @@ def candidate_thresholds(image):
     built for a dominant background peak with a long tail) and is kept as a more inclusive
     alternative. The background-peak rule mirrors what mask_generation.py does, for comparison.
     """
-    sample = image[::SUBSAMPLE, ::SUBSAMPLE, ::SUBSAMPLE].ravel()
+    sample = image[::config.SUBSAMPLE, ::config.SUBSAMPLE, ::config.SUBSAMPLE].ravel()
     # 16-bit wraparound puts the brightest voxels at large negative values (see check_wraparound.py).
     # They are few, but they stretch the histogram range and wreck any bin-position rule, so every
     # threshold here is estimated on the valid (non-negative) voxels only.
@@ -76,13 +71,15 @@ def candidate_thresholds(image):
             'background_peak_unguarded': peak_unguarded}
 
 
-def build_mask(image, threshold, closing_radius=CLOSING_RADIUS_VOX):
+def build_mask(image, threshold, closing_radius=None):
     """
     Threshold -> fill holes -> largest connected component -> small closing -> fill holes again.
 
     Returns:
     numpy.ndarray: boolean mask of the brain in the animal's own image space.
     """
+    if closing_radius is None:
+        closing_radius = config.MASK_CLOSING_VOX
     mask = image > threshold
     mask = ndimage.binary_fill_holes(mask)
 
@@ -106,9 +103,10 @@ def build_mask(image, threshold, closing_radius=CLOSING_RADIUS_VOX):
 
 def pipeline_mask(animal):
     """The mask the pipeline made (convex-hulled), if it is on disk."""
-    path = os.path.join(PARENT, animal, 'registration_dir', 'brain_mask.tif')
+    path = os.path.join(config.DATA_DIR, animal, 'registration_dir', 'brain_mask.tif')
     if not os.path.exists(path):
-        path = os.path.join(PARENT, animal, 'fitc', 'brain_mask.tif')
+        stem = config.CHANNELS.get('FITC', next(iter(config.CHANNELS.values()), 'fitc'))
+        path = os.path.join(config.DATA_DIR, animal, stem, 'brain_mask.tif')
     return tifffile.imread(path) > 0 if os.path.exists(path) else None
 
 
@@ -118,7 +116,7 @@ def atlas_tissue_mask(animal, image):
     from voxels inside the registered atlas, and the atlas itself. Returns (None, None) when there is
     no registration - this pipeline does not need one.
     """
-    path = os.path.join(PARENT, animal, 'registration_dir', 'registered_atlas.tiff')
+    path = os.path.join(config.DATA_DIR, animal, 'registration_dir', 'registered_atlas.tiff')
     if not os.path.exists(path):
         return None, None
     labels = tifffile.imread(path)
@@ -142,8 +140,8 @@ def compare(animal):
     # an earlier tracer segmentation, if one exists, only to report how much of its signal each
     # mask contains; absent for a fresh dataset
     signal = {}
-    for tracer, folder in TRACER_DIRS.items():
-        path = os.path.join(PARENT, animal, folder, 'thresholded_image.tif')
+    for tracer, folder in config.CHANNELS.items():
+        path = os.path.join(config.DATA_DIR, animal, folder, 'thresholded_image.tif')
         if os.path.exists(path):
             signal[tracer] = tifffile.imread(path) > 0
 
@@ -153,7 +151,7 @@ def compare(animal):
         if mask is None:
             continue
         row = {'animal': animal, 'mask': name, 'wrapped_voxels': n_wrapped,
-               'volume_mm3': float(mask.sum()) * VOXEL_MM3}
+               'volume_mm3': float(mask.sum()) * config.VOXEL_MM3}
         if atlas is not None:
             row['dice_with_atlas'] = float(2 * (mask & atlas).sum() / (mask.sum() + atlas.sum()))
             row['atlas_outside_mask_%'] = 100 * float((atlas & ~mask).sum()) / float(atlas.sum())
@@ -192,7 +190,7 @@ def qc_figure(animal, image, thresholds, masks, metrics):
         ax.set_axis_off()
 
     ax = fig.add_subplot(grid[1, :2])
-    sample = image[::SUBSAMPLE, ::SUBSAMPLE, ::SUBSAMPLE].ravel()
+    sample = image[::config.SUBSAMPLE, ::config.SUBSAMPLE, ::config.SUBSAMPLE].ravel()
     ax.hist(sample, bins=np.linspace(0, np.percentile(sample, 99.9), 200), color='#999999')
     for style, (label, value) in zip(['-', '--', ':', '-.'], thresholds.items()):
         ax.axvline(value, color='#333333', linestyle=style, linewidth=1.4, label=f'{label} = {value:.0f}')
@@ -213,8 +211,8 @@ def qc_figure(animal, image, thresholds, masks, metrics):
                loc='lower center', ncol=len(present), frameon=False, fontsize=10)
     fig.suptitle(f'{animal}: brain masks compared, in the animal\'s own image space', x=0.01, ha='left', fontsize=13)
     plt.tight_layout(rect=(0, 0.04, 1, 0.97))
-    os.makedirs(QC_DIR, exist_ok=True)
-    path = os.path.join(QC_DIR, f'{animal}_mask_comparison.png')
+    os.makedirs(config.QC_DIR, exist_ok=True)
+    path = os.path.join(config.QC_DIR, f'{animal}_mask_comparison.png')
     plt.savefig(path, dpi=115)
     plt.close(fig)
     print(f'  wrote {path}')
@@ -223,7 +221,12 @@ def qc_figure(animal, image, thresholds, masks, metrics):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--qc', nargs='+', metavar='ANIMAL', help='compare masks on these animals and write figures')
+    parser.add_argument('--cohort', help='cohort from config.COHORTS (default: $NATIVE_DEPTH_COHORT)')
     args = parser.parse_args()
+    config.select(args.cohort)
+    for line in config.validate():
+        print(line)
+    print(config.describe(), '\n', flush=True)
 
     if args.qc:
         all_metrics = []
@@ -237,10 +240,10 @@ def main():
             qc_figure(animal, image, thresholds, masks, metrics)
             all_metrics.append(metrics)
             del image, masks
-        pd.concat(all_metrics, ignore_index=True).to_csv(os.path.join(QC_DIR, 'mask_comparison.csv'), index=False)
+        pd.concat(all_metrics, ignore_index=True).to_csv(os.path.join(config.QC_DIR, 'mask_comparison.csv'), index=False)
         return
 
-    os.makedirs(MASK_DIR, exist_ok=True)
+    os.makedirs(config.MASK_DIR, exist_ok=True)
     data_map = config.load_data_map()
     animals = config.animals()
     rows, start = [], time.time()
@@ -249,15 +252,15 @@ def main():
         image = read_reference(animal)
         thresholds = candidate_thresholds(image)
         mask = build_mask(image, thresholds['otsu'])
-        np.savez_compressed(os.path.join(MASK_DIR, f'{animal}.npz'),
+        np.savez_compressed(os.path.join(config.MASK_DIR, f'{animal}.npz'),
                             packed=np.packbits(mask), shape=np.array(mask.shape),
                             threshold=np.float32(thresholds['otsu']))
         rows.append({'animal_number': animal, 'treatment': data_map.loc[animal, 'treatment'],
-                     'threshold_otsu': thresholds['otsu'], 'volume_mm3': float(mask.sum()) * VOXEL_MM3})
+                     'threshold_otsu': thresholds['otsu'], 'volume_mm3': float(mask.sum()) * config.VOXEL_MM3})
         print(f'{animal}: volume {rows[-1]["volume_mm3"]:.0f} mm3, {time.time() - t0:.0f} s', flush=True)
         del image, mask
-    pd.DataFrame(rows).to_csv(os.path.join(MASK_DIR, 'mask_summary.csv'), index=False)
-    print(f'\nwrote {len(animals)} masks to {MASK_DIR} in {(time.time() - start) / 60:.1f} min')
+    pd.DataFrame(rows).to_csv(os.path.join(config.MASK_DIR, 'mask_summary.csv'), index=False)
+    print(f'\nwrote {len(animals)} masks to {config.MASK_DIR} in {(time.time() - start) / 60:.1f} min')
 
 
 if __name__ == '__main__':

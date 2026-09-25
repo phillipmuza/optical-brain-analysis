@@ -6,6 +6,10 @@ __pycache__/
 downsampled/
 registration_dir/
 
+# native_depth_analysis outputs, per cohort: masks/<animal>.npz, depth/<animal>.npz, figures, tables
+# and QC figures. Written under the package by default; NATIVE_DEPTH_RESULTS moves them elsewhere.
+native_depth_analysis/results/
+
 # Claude Code local settings (machine-specific)
 .claude/
 
