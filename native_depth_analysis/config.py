@@ -292,7 +292,11 @@ def provenance():
     configuration. Same inputs -> same string.
 
     Paths are deliberately *not* in it: moving a data directory does not change a measurement, and
-    the cohort name plus the run manifest already record where the files came from.
+    the cohort name plus the run manifest already record where the files came from. The exclusion
+    list is not in it either, and deliberately: exclusions decide *which* animals are analysed, not
+    how one is measured, so changing them must not invalidate profiles that are still correct - 03
+    and 04 drop excluded animals at read time instead. Adding either would force a 90-minute re-run
+    for a change that alters no number.
     """
     material = json.dumps({'cohort': COHORT, 'channels': CHANNELS, 'sides': SIDES, 'voxel_um': VOXEL_UM,
                            'mask_closing_vox': MASK_CLOSING_VOX, 'envelope_closing_vox': ENVELOPE_CLOSING_VOX,

@@ -139,6 +139,48 @@ def test_analysis_only_warns_about_files_that_predate_the_check(pipeline_results
     assert animal in printed
 
 
+def test_an_excluded_animal_does_not_reach_the_statistics(pipeline_results, monkeypatch, capsys):
+    """
+    Masks and depth profiles outlive an animal's place in the cohort: they were written before it was
+    excluded, or by a run with a different exclusion list. The published exclusions were applied
+    after the fact in the intensity arm, so this is not hypothetical.
+    """
+    import pandas as pd
+    animal = pipeline_results['animals'][0]
+    config.COHORTS['synthetic']['exclude_animals'] = [animal]
+    config.select('synthetic')
+
+    run_step(analysis, monkeypatch)
+    printed = capsys.readouterr().out
+    assert f'ignoring [\'{animal}\']' in printed
+    per_animal = pd.read_csv(os.path.join(pipeline_results['out'], 'native_depth_per_animal.csv'))
+    assert animal not in set(per_animal['animal'])
+    assert len(per_animal) == (len(pipeline_results['animals']) - 1) * len(config.CHANNELS) * len(config.SIDES)
+
+
+def test_a_changed_exclusion_list_does_not_invalidate_older_profiles(pipeline_results, monkeypatch, capsys):
+    """
+    The other half of the exclusion rule, and the reason it is a read-time filter rather than part of
+    the fingerprint: excluding an animal says nothing about how the others were measured, so it must
+    not force a 90-minute re-run. The profiles stay valid; the animal is dropped when they are read.
+    """
+    import numpy as np
+    import pandas as pd
+    animal = pipeline_results['animals'][0]
+    with np.load(os.path.join(pipeline_results['depth'], f'{animal}.npz'), allow_pickle=True) as data:
+        fingerprint = str(data['provenance'])
+    assert fingerprint == config.provenance()
+
+    config.COHORTS['synthetic']['exclude_animals'] = [animal]
+    config.select('synthetic')
+    assert config.provenance() == fingerprint, 'cohort membership is not a measurement parameter'
+
+    run_step(analysis, monkeypatch)          # runs rather than refusing
+    capsys.readouterr()
+    per_animal = pd.read_csv(os.path.join(pipeline_results['out'], 'native_depth_per_animal.csv'))
+    assert animal not in set(per_animal['animal'])
+
+
 def test_a_cohort_entry_with_a_wrong_group_name_stops_before_any_work(synthetic_cohort_fixture, monkeypatch):
     """
     The other half of generalising: a typo in a group name must not reach the figures. It is the one

@@ -52,8 +52,14 @@ def short(treatment):
 
 def load():
     """Per animal x tracer x side: band sums, from the depth histograms."""
-    animals = sorted([f[:-4] for f in os.listdir(config.DEPTH_DIR) if f.endswith('.npz')],
-                     key=config.sort_key)
+    listed = sorted([f[:-4] for f in os.listdir(config.DEPTH_DIR) if f.endswith('.npz')],
+                    key=config.sort_key)
+    # Same rule as 03: a depth profile for an animal this cohort excludes must not reach the
+    # statistics, however it got there. Reported rather than dropped in silence.
+    excluded = [a for a in listed if a in config.EXCLUDE_ANIMALS]
+    animals = [a for a in listed if a not in excluded]
+    if excluded:
+        print(f'note: ignoring {excluded}: excluded for cohort {config.COHORT}\n')
     rows, profiles = [], {}
     for animal in animals:
         data = np.load(os.path.join(config.DEPTH_DIR, f'{animal}.npz'), allow_pickle=True)

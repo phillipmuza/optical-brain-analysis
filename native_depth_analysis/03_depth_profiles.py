@@ -239,8 +239,16 @@ def main():
 
     os.makedirs(config.DEPTH_DIR, exist_ok=True)
     data_map = config.load_data_map()
-    animals = sorted([f[:-4] for f in os.listdir(config.MASK_DIR) if f.endswith('.npz')],
-                     key=config.sort_key)
+    listed = sorted([f[:-4] for f in os.listdir(config.MASK_DIR) if f.endswith('.npz')],
+                    key=config.sort_key)
+    # A mask can outlive the animal's place in the cohort - written before it was excluded, or by a
+    # run with a different exclusion list. Analysing it anyway would put an animal into the
+    # statistics that the data map and the README both say is not there.
+    excluded = [a for a in listed if a in config.EXCLUDE_ANIMALS]
+    animals = [a for a in listed if a not in excluded]
+    if excluded:
+        print(f'note: ignoring {excluded}: excluded for cohort {config.COHORT}. '
+              f'Delete their masks in {config.MASK_DIR} if that is not what you want.\n')
     missing = [a for a in config.animals() if a not in animals]
     if missing:
         print(f'no mask for {missing} - run 02_build_masks.py for this cohort first\n')
