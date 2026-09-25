@@ -16,6 +16,33 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
+# The native-depth package is a directory of scripts, not an importable package, so the tests put it
+# and their own directory (for synthetic_cohort.py) on the path themselves.
+TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+NATIVE_DEPTH_DIR = os.path.join(REPO_ROOT, 'native_depth_analysis')
+for _path in (TESTS_DIR, NATIVE_DEPTH_DIR):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
+
+
+@pytest.fixture
+def synthetic_cohort_fixture(tmp_path, monkeypatch):
+    """
+    Register a fabricated cohort with config.COHORTS, and undo it afterwards.
+
+    Results are redirected to tmp_path too, so a test run never writes masks or figures into the
+    package directory - which is what the default results/<cohort> path would otherwise do.
+    """
+    import synthetic_cohort
+    import config
+
+    data_dir, data_map, animals = synthetic_cohort.build_cohort(tmp_path)
+    monkeypatch.setitem(config.COHORTS, 'synthetic',
+                        synthetic_cohort.cohort_entry(data_dir, data_map))
+    monkeypatch.setenv('NATIVE_DEPTH_RESULTS', str(tmp_path / 'results'))
+    monkeypatch.delenv('NATIVE_DEPTH_COHORT', raising=False)
+    yield data_dir, data_map, animals
+
 # Two real atlas IDs standing in for "region A" (cortex-like block) and "region B".
 REGION_A = 9
 REGION_B = 653
