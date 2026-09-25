@@ -37,8 +37,9 @@ def synthetic_cohort_fixture(tmp_path, monkeypatch):
     import config
 
     data_dir, data_map, animals = synthetic_cohort.build_cohort(tmp_path)
+    annotation = synthetic_cohort.write_atlas_annotation(tmp_path)
     monkeypatch.setitem(config.COHORTS, 'synthetic',
-                        synthetic_cohort.cohort_entry(data_dir, data_map))
+                        synthetic_cohort.cohort_entry(data_dir, data_map, atlas_annotation=annotation))
     monkeypatch.setenv('NATIVE_DEPTH_RESULTS', str(tmp_path / 'results'))
     monkeypatch.delenv('NATIVE_DEPTH_COHORT', raising=False)
     yield data_dir, data_map, animals

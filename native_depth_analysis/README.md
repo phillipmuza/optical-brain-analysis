@@ -148,7 +148,8 @@ python 02_build_masks.py                 # ~45 min for 20 animals
 python 03_depth_profiles.py --qc an4     # ~5 min    check the envelope and the profile shape
 python 03_depth_profiles.py              # ~90 min for 20 animals
 python 04_analysis.py                    # seconds   statistics and figures
-python 05_atlas_maps.py                  # optional, atlas-space figures; needs the stage-05 inputs
+python 05_atlas_space.py                 # optional, atlas-space volumes; needs the brainglobe atlas
+python 06_atlas_maps.py                  # optional, atlas-space figures; needs 05
 ```
 
 Add `--cohort NAME` to any of them (or set `NATIVE_DEPTH_COHORT`) to run a dataset other than the
@@ -216,6 +217,38 @@ Outputs in `outputs/`: `native_depth_per_animal.csv`, `native_depth_anova.csv`,
 `native_depth_profiles.png`, `native_depth_headline.png`, `native_vs_ivis.png`,
 `native_vs_ivis_average.png`.
 
+### 5. `05_atlas_space.py`
+
+Optional, and the only step that needs an atlas. Everything above measures each animal against its
+own surface, which is right for **how much** tracer there is; to see **where** it is, animals have to
+share a grid. Each tissue voxel is dropped into the atlas voxel its brainreg deformation field points
+at, and each atlas voxel takes the mean raw intensity of the voxels that landed in it. Nothing is
+normalised or thresholded in the saved volumes, so a figure can window all animals together
+(absolute - valid only because acquisition settings were identical across the cohort).
+
+Voxels are kept wherever there is tissue, not only inside the registered atlas, because the pial rim
+and the cisterns - the compartment the atlas does not cover, and where the effect is expected - would
+otherwise be lost. It also writes the per animal x channel detection threshold that step 06 applies:
+background + `K_MAD` robust SDs over the atlas voxels that hold tissue (tissue being the registration
+image above background by `TISSUE_K` robust SDs, which is what excludes atlas voxels overhanging the
+sample).
+
+Needs the brainglobe install of `config.ATLAS` (set `ATLAS_ANNOTATION` once, in config.py) and this
+cohort's `registration_dir/`, so brainreg must have been run. `--qc <animal>` prints the coverage, the
+tissue fraction and how much signal-bearing volume sits outside the atlas outline, and writes a
+figure of the resampled planes.
+
+Outputs, per cohort: `results/<cohort>/atlas_space/<animal>.npz` (raw intensities on the atlas grid
+binned by `ATLAS_BIN`, the sample-voxel count per atlas voxel, the backgrounds, and the configuration
+that produced them) and `threshold_summary.csv` next to them.
+
+### 6. `06_atlas_maps.py`
+
+The atlas-space figures, from step 05's outputs: group-mean signal across the brain with the
+surface/deep boundary drawn and the dose/reference ratio underneath, and the integrated signal per
+coronal plane from hindbrain to olfactory bulb. Display only - no statistic in this pipeline is
+computed from atlas space, and 01-04 run with no atlas at all.
+
 ## Things to keep in mind when reading the results
 
 - **The mask is built from the reference image, which in our dataset was a copy of a tracer channel.**
@@ -237,13 +270,11 @@ Outputs in `outputs/`: `native_depth_per_animal.csv`, `native_depth_anova.csv`,
 
 ## What is deliberately not here
 
-The registration and region-based work - registration QC, regional cluster tests - lives in
-`../NS24122_intensity/` and `../native_space_analysis/` alongside notes on the registration problems
-(`registration_and_mask_issues.md`) and the reasoning behind this design
-(`native_space_surface_analysis.md`).
+The registration and region-based work - regional cluster tests, the per-region intensity tables, the
+notebooks that explore them - lives in `../NS24122_intensity/`. Steps 05 and 06 here were ported from
+it so that this pipeline no longer depends on another folder's paths, constants or cache; what stayed
+behind is the analysis this pipeline exists to avoid, measuring signal per atlas region.
 
-`05_atlas_maps.py` is the one atlas-dependent stage here, and only for **display** alignment. Its
-input, the per-animal atlas-space resampling, is still produced outside this repository
-(`../NS24122_intensity/atlas_space_images.py`) - so stage 05 reproduces for a cohort whose
-atlas-space volumes already exist, and not otherwise. Nothing else in the pipeline depends on it:
-01-04 run with no atlas at all.
+Two notes in that folder record the reasoning and the problems it ran into
+(`native_space_surface_analysis.md`, `registration_and_mask_issues.md`); the README above states the
+decisions this pipeline took in response.

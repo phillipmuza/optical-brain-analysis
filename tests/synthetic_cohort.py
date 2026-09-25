@@ -27,6 +27,18 @@ RIM_GAIN = 300                # rim brightness per animal index: the group effec
 RIM_TRACER = 50               # rim brightness per tracer
 DEEP_FRACTION = 0.03          # share of the interior carrying tracer past the threshold
 DEEP_GAIN = 1000              # and how bright those voxels are, per animal index
+# A single unambiguous bright marker well inside the brain. The tracer rim is symmetric about the
+# brain centre, so it cannot tell a correct atlas mapping from a transposed one; this can.
+MARKER_VOXEL = (18, 32, 32)
+MARKER_RADIUS = 2
+MARKER_VALUE = 12000
+
+
+def _marker(shape=SHAPE):
+    """A small bright blob at a known off-centre voxel."""
+    grid = np.indices(shape, dtype=np.float32)
+    centre = np.array(MARKER_VOXEL, dtype=np.float32)[:, None, None, None]
+    return ((grid - centre) ** 2).sum(axis=0) <= MARKER_RADIUS ** 2
 
 
 def sphere(shape=SHAPE):
@@ -68,7 +80,47 @@ def synthetic_image(animal_index, tracer_index, seed=0):
     interior_values[bright] += rng.integers(DEEP_GAIN, DEEP_GAIN * (2 + animal_index % 3),
                                             size=int(bright.sum()))
     image[interior] = interior_values.astype(np.uint16)
+    image[_marker()] = MARKER_VALUE
     return image
+
+
+def write_registration(animal_dir, shape=SHAPE, radius=26.0, offset=(3.0, 0.0, 0.0)):
+    """
+    A fake brainreg output for one animal, with an identity registration.
+
+    Values are what brainreg writes: registered_atlas.tiff is the atlas labels resampled into the
+    sample grid, and deformation_field_<axis>.tiff holds the atlas coordinate in mm of every sample
+    voxel. An identity field (the voxel's own coordinate) keeps the expected mapping computable.
+
+    The atlas sphere is offset from the brain sphere, so the registered atlas overhangs the sample on
+    one side - the dark overhang voxels are the ones tissue_mask exists to exclude, and the offset
+    also breaks the fixture's symmetry, so a transposed or sign-flipped resampling shows up.
+    """
+    reg_dir = animal_dir / 'registration_dir'
+    reg_dir.mkdir(parents=True, exist_ok=True)
+    grid = np.indices(shape, dtype=np.float32)
+    centre = np.array(shape, dtype=np.float32)[:, None, None, None] / 2 - 0.5
+    centre = centre + np.array(offset, dtype=np.float32)[:, None, None, None]
+    distance = np.sqrt(((grid - centre) ** 2).sum(axis=0))
+    labels = np.where(distance < radius, 1, 0).astype(np.uint32)
+    tifffile.imwrite(reg_dir / 'registered_atlas.tiff', labels)
+    tifffile.imwrite(reg_dir / 'registered_hemispheres.tiff',
+                     np.where(labels > 0, 1, 0).astype(np.uint32))
+    for axis in range(3):
+        # a sub-voxel offset: without one the coordinates land exactly on the .5 bin boundaries,
+        # where rint's tie-breaking differs between float32 arithmetic (the code) and float64 (a
+        # test recomputing it), and a handful of voxels then land in different atlas voxels
+        tifffile.imwrite(reg_dir / f'deformation_field_{axis}.tiff',
+                         ((grid[axis] + 0.37) * (VOXEL_UM / 1000)).astype(np.float32))
+    return labels
+
+
+def write_atlas_annotation(root, shape=SHAPE, radius=26.0):
+    """A stand-in for the brainglobe annotation: the same grid, one label inside the atlas sphere."""
+    path = root / 'atlas' / 'annotation.tiff'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tifffile.imwrite(path, np.where(sphere(shape) < radius, 1, 0).astype(np.uint32))
+    return path
 
 
 DEFAULT_GROUPS = (("Vehicle", 2), ("Medetomidine", 2), ("K/X", 2))
@@ -96,6 +148,7 @@ def build_cohort(root, groups=DEFAULT_GROUPS, seed=0):
             tifffile.imwrite(animal_dir / 'txr.tif', txr)
             # a copy on disk, not a symlink: the pipeline reads it as its own file
             tifffile.imwrite(animal_dir / 'registration.tif', fitc)
+            write_registration(data_dir / animal)
             animals.append(animal)
             rows.append({'blinded_number': animal, 'treatment': group})
     data_map = root / 'data_map.csv'
@@ -103,16 +156,13 @@ def build_cohort(root, groups=DEFAULT_GROUPS, seed=0):
     return data_dir, data_map, animals
 
 
-def cohort_entry(data_dir, data_map, groups=DEFAULT_GROUPS, name='synthetic'):
+def cohort_entry(data_dir, data_map, groups=DEFAULT_GROUPS, name='synthetic', atlas_annotation=None):
     """The config.COHORTS value for a cohort built by build_cohort()."""
     palette = ['#7f7f7f', '#4C72B0', '#C1666B', '#8ED081']
-    return {
+    entry = {
         'data_dir': str(data_dir),
         'data_map': str(data_map),
         'second_modality_csv': None,
-        'atlas_annotation': None,
-        'atlas_space_dir': None,
-        'threshold_summary': None,
         'mask_channel_is_tracer': 'FITC',
         'groups': [{'name': group, 'label': group.replace('Drug_', ''), 'color': palette[k % len(palette)]}
                    for k, (group, _) in enumerate(groups)],
@@ -120,3 +170,6 @@ def cohort_entry(data_dir, data_map, groups=DEFAULT_GROUPS, name='synthetic'):
         'exclude_animals': [],
         'example_animal': 'an1',
     }
+    if atlas_annotation is not None:
+        entry['atlas_annotation'] = str(atlas_annotation)
+    return entry

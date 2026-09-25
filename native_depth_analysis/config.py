@@ -55,6 +55,7 @@ SECOND_MODALITY_COLUMNS = {'animal': 'blinded_number', 'tracer': 'tracer', 'tiss
                            'total': 'total_radiant_efficiency', 'average': 'avg_radiant_efficiency'}
 SECOND_MODALITY_TISSUE_TO_SIDE = {'dorsal_brain': 'dorsal', 'ventral_brain': 'ventral'}
 SECOND_MODALITY_LABEL = 'IVIS'       # default name for the modality in labels; override per cohort
+TISSUE_K = 2.0                # step 05: tissue = registration image > background - TISSUE_K robust SDs
 # native measure -> second-modality column. The two columns differ only by ROI area, so the matched
 # light-sheet quantity differs too: an integral for the total, a per-voxel average for the average.
 SECOND_MODALITY_PAIRS = (('surface_0_500um', 'total'), ('surface_per_voxel', 'average'))
@@ -65,6 +66,10 @@ SECOND_MODALITY_PAIRS = (('surface_0_500um', 'total'), ('surface_per_voxel', 'av
 ATLAS = 'perens_lsfm_mouse_20um'
 ATLAS_VOXEL_UM = 20.0
 ATLAS_BIN = 2
+# The one atlas input this pipeline cannot produce for itself: a brainglobe install of ATLAS, which
+# lives wherever it was installed. The _v1.2 suffix is part of the installed directory name. A cohort
+# with a different atlas overrides it in its own entry.
+ATLAS_ANNOTATION_DEFAULT = r'C:\Users\skgtpm1\.brainglobe\perens_lsfm_mouse_20um_v1.2\annotation.tiff'
 
 # --- cohorts: the only part that changes between datasets --------------------------------------
 # mask_channel_is_tracer: set to the tracer name when downsampled/REFERENCE_IMAGE is a copy of that
@@ -75,14 +80,10 @@ COHORTS = {
         'data_dir': r'E:\tracer_uptake\wt_mice\new_analysis_0926',
         'data_map': r'E:\tracer_uptake\wt_mice\data_map.csv',
         'second_modality_csv': r'E:\tracer_uptake\wt_mice\ivis_raw_data\ex_vivo\brain_data.csv',
-        # Step 05 only. ATLAS_DIR in fixed_threshold_intensity.py, i.e. the brainglobe install of
-        # config.ATLAS (the _v1.2 suffix is part of the installed directory name). The other two are
-        # written by the sibling folder's own scripts: atlas_space_images.OUT_DIR is its atlas_space,
-        # and fixed_threshold_intensity writes its threshold table next to itself. Both are generated
-        # there and are not in the repository.
-        'atlas_annotation': r'C:\Users\skgtpm1\.brainglobe\perens_lsfm_mouse_20um_v1.2\annotation.tiff',
-        'atlas_space_dir': os.path.join(REPO_ROOT, 'NS24122_intensity', 'atlas_space'),
-        'threshold_summary': os.path.join(REPO_ROOT, 'NS24122_intensity', 'threshold_summary.csv'),
+        # Step 05 and 06 only. ATLAS_SPACE_DIR and THRESHOLD_SUMMARY are written by 05 into the cohort's
+        # own results directory, so they are left unset here - set them only to reuse volumes computed
+        # elsewhere (the original intensity arm kept them in NS24122_intensity/). ATLAS_ANNOTATION
+        # comes from ATLAS_ANNOTATION_DEFAULT.
         'mask_channel_is_tracer': 'FITC',
         'groups': [
             {'name': 'Vehicle', 'label': 'Vehicle', 'color': '#7f7f7f'},
@@ -103,14 +104,9 @@ COHORTS = {
         'data_dir': r'D:\anaesthetic_experiments\cleared_brains_new_analysis',
         'data_map': r'D:\anaesthetic_experiments\cleared_brains_new_analysis\data_map.csv',  # TODO(confirm)
         'second_modality_csv': None,                  # TODO(confirm): all cohorts have one
-        # Step 05 only, and unset: no atlas-space resampling has been run for this cohort, and the
-        # resampler itself lives in the sibling project (see README, "What is deliberately not
-        # here"). Leave these None until the per-animal atlas-space volumes exist, then point
-        # ATLAS_SPACE_DIR at them, THRESHOLD_SUMMARY at that run's threshold table and
-        # ATLAS_ANNOTATION at the annotation of config.ATLAS. Steps 01-04 never read them.
-        'atlas_annotation': None,
-        'atlas_space_dir': None,
-        'threshold_summary': None,
+        # Step 05 and 06 only, and unset: 05 has not been run for this cohort, so it has no atlas-space
+        # volumes yet. 05 writes them into this cohort's results directory; leave these None unless
+        # you are reusing volumes computed elsewhere.
         'mask_channel_is_tracer': 'FITC',
         'groups': [
             {'name': 'Isoflurane', 'label': 'Isoflurane', 'color': '#7f7f7f'},
@@ -155,9 +151,9 @@ BANDS = {SHALLOW_BAND: (0.0, 0.2), SURFACE_BAND: (0.0, SURFACE_MM),
 # --- names resolved by select(); do not edit ----------------------------------------------------
 COHORT = ''
 GROUPS = []                   # the cohort's groups, in order, as {name, label, color}
-DATA_DIR = DATA_MAP = SECOND_MODALITY_CSV = ''
-SECOND_MODALITY_NAME = ''     # what the figures call the second modality, e.g. 'IVIS'
-ATLAS_ANNOTATION = ATLAS_SPACE_DIR = THRESHOLD_SUMMARY = ''
+DATA_DIR = DATA_MAP = SECOND_MODALITY_CSV = SECOND_MODALITY_NAME = ''
+ATLAS_ANNOTATION = ''
+ATLAS_SPACE_DIR = THRESHOLD_SUMMARY = ''
 MASK_CHANNEL_IS_TRACER = ''
 EXAMPLE_ANIMAL = ''
 GROUP_ORDER = []
@@ -203,9 +199,7 @@ def select(cohort=None):
     DATA_MAP = spec['data_map']
     SECOND_MODALITY_CSV = spec['second_modality_csv'] or ''
     SECOND_MODALITY_NAME = spec.get('second_modality_label', SECOND_MODALITY_LABEL)
-    ATLAS_ANNOTATION = spec['atlas_annotation'] or ''
-    ATLAS_SPACE_DIR = spec['atlas_space_dir'] or ''
-    THRESHOLD_SUMMARY = spec['threshold_summary'] or ''
+    ATLAS_ANNOTATION = spec.get('atlas_annotation') or ATLAS_ANNOTATION_DEFAULT
     MASK_CHANNEL_IS_TRACER = spec['mask_channel_is_tracer'] or ''
     EXAMPLE_ANIMAL = spec['example_animal']
     _data_map_cache = None
@@ -218,10 +212,16 @@ def select(cohort=None):
     FIG_DIR = os.path.join(RESULTS_DIR, 'figures')
     OUT_DIR = os.path.join(RESULTS_DIR, 'outputs')
     QC_DIR = os.path.join(RESULTS_DIR, 'qc')
+    # Step 05's outputs, and step 06's inputs. Namespaced per cohort for the same reason everything
+    # else is: animal ids repeat across cohorts, and the code this was ported from wrote
+    # atlas_space/<animal>.npz for whichever cohort its hardcoded data path pointed at. A cohort
+    # spec can still override these to reuse volumes computed elsewhere.
+    ATLAS_SPACE_DIR = spec.get('atlas_space_dir') or os.path.join(RESULTS_DIR, 'atlas_space')
+    THRESHOLD_SUMMARY = spec.get('threshold_summary') or os.path.join(ATLAS_SPACE_DIR, 'threshold_summary.csv')
 
     # Created up front so every step can write its first file immediately. Scripts also makedirs
     # before use, but 01 writes its QC csv before the only makedirs call it has (inside figure()).
-    for directory in (RESULTS_DIR, MASK_DIR, DEPTH_DIR, FIG_DIR, OUT_DIR, QC_DIR):
+    for directory in (RESULTS_DIR, MASK_DIR, DEPTH_DIR, FIG_DIR, OUT_DIR, QC_DIR, ATLAS_SPACE_DIR):
         os.makedirs(directory, exist_ok=True)
     return name
 
@@ -385,10 +385,13 @@ def validate():
     if SECOND_MODALITY_CSV and not os.path.isfile(SECOND_MODALITY_CSV):
         warnings.append('second_modality_csv does not exist, step 04 will skip the cross-validation: '
                         + SECOND_MODALITY_CSV)
-    for label, path in (('atlas_annotation', ATLAS_ANNOTATION), ('atlas_space_dir', ATLAS_SPACE_DIR),
-                        ('threshold_summary', THRESHOLD_SUMMARY)):
-        if path and not os.path.exists(path):
-            warnings.append(f'{label} does not exist, step 05 cannot run: {path}')
+    # The atlas annotation is a real external input (a brainglobe install). The other two are written
+    # by step 05, so their absence is normal until it has run - it is 06 that needs telling.
+    if ATLAS_ANNOTATION and not os.path.isfile(ATLAS_ANNOTATION):
+        warnings.append(f'atlas_annotation does not exist, step 05 cannot run: {ATLAS_ANNOTATION}')
+    if not os.path.isfile(THRESHOLD_SUMMARY) or not os.path.isdir(ATLAS_SPACE_DIR):
+        warnings.append(f'no atlas-space volumes for this cohort yet, step 06 cannot run until 05 has: '
+                        f'{ATLAS_SPACE_DIR}')
     if problems:
         raise SystemExit('config problems:\n  - ' + '\n  - '.join(problems))
 

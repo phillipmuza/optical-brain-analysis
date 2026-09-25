@@ -15,25 +15,22 @@ used in the native-space statistics:
 Signal is the same quantity as in the statistics: raw intensity above that animal's background,
 counted only where it exceeds that animal's fixed threshold.
 
-Inputs, all per cohort in config.py:
-  ATLAS_ANNOTATION    the annotation of config.ATLAS itself, in atlas space
-  ATLAS_SPACE_DIR     one npz per animal: tracer volumes on the atlas grid, each with bg_<tracer>,
-                      plus 'n' for coverage
-  THRESHOLD_SUMMARY   per animal x tracer threshold, as 03 computes them
+Inputs, produced by 05_atlas_space.py from this cohort's own registration (no other folder involved):
+  config.ATLAS_SPACE_DIR     one npz per animal: tracer volumes on the atlas grid, each with
+                             bg_<tracer>, plus 'n' for coverage
+  config.THRESHOLD_SUMMARY   per animal x tracer threshold, as 05 computes them
+  config.ATLAS_ANNOTATION    the annotation of config.ATLAS itself, in atlas space
 
-The resampling step that produces ATLAS_SPACE_DIR is NOT in this repository - it lives with the
-intensity work (../NS24122_intensity/atlas_space_images.py) and has to be run there, per cohort,
-before this stage can run. So this stage reproduces for a cohort whose atlas-space volumes already
-exist, and not otherwise. config.validate() warns when those paths are absent; nothing else in the
-pipeline depends on them.
+Stage 05 must have run for this cohort first; this script says so rather than failing on an empty
+path. Nothing else in the pipeline depends on either - 01-04 run with no atlas at all.
 
 Outputs (figures/):
   compartment_maps_<tracer>.png   group-mean signal across the brain, with the surface/deep boundary
                                   drawn and the dose/reference ratio underneath
   coronal_profile.png             integrated signal per coronal plane, hindbrain -> olfactory bulb
 
-Run:  python 05_atlas_maps.py            # cohort from config / $NATIVE_DEPTH_COHORT
-      python 05_atlas_maps.py --cohort anaesthetic
+Run:  python 06_atlas_maps.py            # cohort from config / $NATIVE_DEPTH_COHORT
+      python 06_atlas_maps.py --cohort anaesthetic
 """
 import argparse
 import os
@@ -121,6 +118,11 @@ def compartment_maps(signal, covered, groups, brain, compartment_masks, tracer):
     towards zero. It is a local density of tracer signal, not a new quantity.
     """
     planes = [int(round(mm / config.ATLAS_SPACING_MM)) for mm in PLANES_MM]
+    # A grid can be smaller than PLANES_MM assumes (a smaller atlas, or a bigger ATLAS_BIN), so keep
+    # the planes that exist and fall back to an even spread rather than indexing off the end.
+    planes = [p for p in planes if 0 <= p < brain.shape[0]]
+    if not planes:
+        planes = list(np.linspace(0, brain.shape[0] - 1, min(6, brain.shape[0])).astype(int))
     means = {}
     for treatment in config.GROUP_ORDER:
         total = np.zeros(brain.shape, np.float32)
@@ -250,15 +252,18 @@ def main():
         print(line)
     print(config.describe(), '\n', flush=True)
 
-    if not (config.ATLAS_ANNOTATION and config.ATLAS_SPACE_DIR and config.THRESHOLD_SUMMARY):
+    if not os.path.isfile(config.THRESHOLD_SUMMARY) or not os.path.isdir(config.ATLAS_SPACE_DIR):
         raise SystemExit(
-            'step 05 needs its three atlas-space inputs for this cohort, and they are not set:\n'
-            '  atlas_annotation  - the annotation of config.ATLAS (ATLAS)\n'
-            '  atlas_space_dir   - per-animal volumes resampled to the atlas grid\n'
-            '  threshold_summary - that run\'s per animal x tracer thresholds\n'
-            'The resampling step that produces the latter two is not part of this repository, so\n'
-            'they only exist for a cohort it has already been run on. Steps 01-04 need no atlas\n'
-            'and are unaffected - this stage is optional.')
+            f'this cohort has no atlas-space volumes yet, and this stage needs them.\n'
+            f'  expected  {config.ATLAS_SPACE_DIR}/*.npz and {config.THRESHOLD_SUMMARY}\n'
+            f'Run step 05 first:  python 05_atlas_space.py --cohort {config.COHORT}\n'
+            f'It needs the brainglobe annotation of {config.ATLAS} (config.ATLAS_ANNOTATION) and '
+            f'this cohort\'s brainreg registration_dir/. Steps 01-04 need no atlas and are '
+            f'unaffected - this stage is optional.')
+    volumes = [f for f in os.listdir(config.ATLAS_SPACE_DIR) if f.endswith('.npz')]
+    if not volumes:
+        raise SystemExit(f'{config.ATLAS_SPACE_DIR} holds no .npz volumes; step 05 has not produced '
+                         f'anything for {config.COHORT}')
 
     os.makedirs(config.FIG_DIR, exist_ok=True)
     os.makedirs(config.OUT_DIR, exist_ok=True)
