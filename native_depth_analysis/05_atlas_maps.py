@@ -262,6 +262,7 @@ def main():
     for tracer in config.CHANNELS:
         compartment_maps(signal, covered, groups, brain, compartment_masks, tracer)
     coronal_profile(signal, covered, groups, brain, compartment_masks)
+    print(f'manifest: {config.write_manifest("05_atlas_maps", {"groups": {t: len(m) for t, m in groups.items()}})}')
 
 
 if __name__ == '__main__':

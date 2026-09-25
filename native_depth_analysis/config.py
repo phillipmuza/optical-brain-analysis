@@ -20,8 +20,11 @@ the NS24122 and anaesthetic series both run an1, an2, an17 - so two cohorts must
 results directory. (Set NATIVE_DEPTH_RESULTS to an exact path to override, which is how you point
 step 04 at results computed earlier.)
 """
+import hashlib
+import json
 import os
 import re
+import time
 
 import pandas as pd
 
@@ -262,6 +265,51 @@ def groups():
 def image_path(animal, filename):
     """One file under an animal's downsampled/ directory."""
     return os.path.join(DATA_DIR, animal, 'downsampled', filename)
+
+
+def provenance():
+    """
+    A fingerprint of everything that determines the numbers, written into every mask and depth
+    profile so a later step can tell whether the file in front of it was produced by the current
+    configuration. Same inputs -> same string.
+
+    Paths are deliberately *not* in it: moving a data directory does not change a measurement, and
+    the cohort name plus the run manifest already record where the files came from.
+    """
+    material = json.dumps({'cohort': COHORT, 'channels': CHANNELS, 'sides': SIDES, 'voxel_um': VOXEL_UM,
+                           'mask_closing_vox': MASK_CLOSING_VOX, 'envelope_closing_vox': ENVELOPE_CLOSING_VOX,
+                           'k_mad': K_MAD, 'depth_lo': DEPTH_LO, 'depth_hi': DEPTH_HI,
+                           'depth_step': DEPTH_STEP, 'surface_mm': SURFACE_MM},
+                          sort_keys=True, default=str)
+    return hashlib.sha256(material.encode()).hexdigest()[:16]
+
+
+def write_manifest(stage, extra=None):
+    """
+    Record this run next to the results it produced: which cohort, which parameters, which animals.
+
+    Call it after validate(), so the cohort is known to be loadable. One file per cohort, keyed by
+    stage, so re-running a step replaces that step's record and leaves the others alone.
+    """
+    path = os.path.join(RESULTS_DIR, 'run_manifest.json')
+    manifest = {}
+    if os.path.isfile(path):
+        try:
+            with open(path, encoding='utf-8') as handle:
+                manifest = json.load(handle)
+        except (OSError, ValueError):
+            manifest = {}
+    manifest[stage] = {
+        'cohort': COHORT,
+        'provenance': provenance(),
+        'when': time.strftime('%Y-%m-%d %H:%M:%S'),
+        'config': describe(),
+        'animals': {treatment: group_members(treatment, strict=False) for treatment in GROUP_ORDER},
+        **(extra or {}),
+    }
+    with open(path, 'w', encoding='utf-8') as handle:
+        json.dump(manifest, handle, indent=2, sort_keys=True)
+    return path
 
 
 def channel_files():

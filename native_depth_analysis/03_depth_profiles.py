@@ -112,7 +112,8 @@ def animal_profile(animal):
                      dtype=np.float32)
     n_bins = len(edges) - 1
     result = {'edges': edges, 'mask_volume_mm3': float(mask.sum()) * config.VOXEL_MM3,
-              'envelope_volume_mm3': float(envelope.sum()) * config.VOXEL_MM3}
+              'envelope_volume_mm3': float(envelope.sum()) * config.VOXEL_MM3,
+              'cohort': config.COHORT, 'provenance': config.provenance()}
 
     for tracer, folder in config.CHANNELS.items():
         raw = tifffile.imread(config.image_path(animal, f'{folder}.tif'))
@@ -243,6 +244,7 @@ def main():
         print(f'{animal}: {time.time() - t0:.0f} s', flush=True)
     print(f'\nwrote {len(animals)} depth profiles to {config.DEPTH_DIR} '
           f'in {(time.time() - start) / 60:.1f} min')
+    print(f'manifest: {config.write_manifest("03_depth_profiles", {"profiles_written": len(animals)})}')
 
 
 if __name__ == '__main__':

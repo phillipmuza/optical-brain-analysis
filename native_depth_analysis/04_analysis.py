@@ -294,6 +294,39 @@ def figures(df, profiles, centres, merged, correlations, anova_table, posthoc):
     print(f'wrote 4 figures to {config.FIG_DIR}')
 
 
+def check_depth_provenance():
+    """
+    Refuse to analyse depth profiles produced under a different configuration.
+
+    A mismatch is a hard stop: it means these files belong to another cohort, or were written with
+    different threshold, envelope or binning parameters, and either way any figure built on them
+    would be wrong in a way nothing downstream could detect. A file with *no* recorded provenance
+    predates this check, so it is a warning rather than a stop - the NS24122 numbers on disk today
+    are exactly that, and re-running 03 is a 90-minute decision, not one to make silently.
+    """
+    mine = config.provenance()
+    stale, unknown = [], []
+    for name in sorted(os.listdir(config.DEPTH_DIR)):
+        if not name.endswith('.npz'):
+            continue
+        with np.load(os.path.join(config.DEPTH_DIR, name), allow_pickle=True) as data:
+            recorded = str(data['provenance']) if 'provenance' in data else ''
+            cohort = str(data['cohort']) if 'cohort' in data else 'unrecorded'
+        if not recorded:
+            unknown.append(name[:-4])
+        elif recorded != mine:
+            stale.append(f'{name[:-4]}: cohort {cohort}, fingerprint {recorded}')
+    if stale:
+        raise SystemExit(f'{len(stale)} depth profile(s) in {config.DEPTH_DIR} were written under a '
+                         f'different configuration (this is cohort {config.COHORT}, fingerprint '
+                         f'{mine}):\n  - ' + '\n  - '.join(stale) +
+                         f'\nPoint --cohort at the right cohort, or delete {config.DEPTH_DIR} and '
+                         f're-run 03_depth_profiles.py.')
+    if unknown:
+        print(f'warning: {len(unknown)} depth profile(s) carry no provenance and may predate this '
+              f'configuration: {unknown}. Re-run 03_depth_profiles.py to be certain.')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--cohort', help='cohort from config.COHORTS (default: $NATIVE_DEPTH_COHORT)')
@@ -302,6 +335,7 @@ def main():
     for line in config.validate():
         print(line)
     print(config.describe(), '\n', flush=True)
+    check_depth_provenance()
 
     os.makedirs(config.OUT_DIR, exist_ok=True)
     df, profiles, centres = load()
@@ -336,6 +370,7 @@ def main():
         print(correlations.to_string(index=False, float_format=lambda v: f'{v:.3f}'))
 
     figures(df, profiles, centres, merged, correlations, anova_table, posthoc)
+    print(f'manifest: {config.write_manifest("04_analysis", {"animals_in_profiles": int(df["animal"].nunique())})}')
 
 
 if __name__ == '__main__':

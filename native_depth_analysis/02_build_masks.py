@@ -254,13 +254,15 @@ def main():
         mask = build_mask(image, thresholds['otsu'])
         np.savez_compressed(os.path.join(config.MASK_DIR, f'{animal}.npz'),
                             packed=np.packbits(mask), shape=np.array(mask.shape),
-                            threshold=np.float32(thresholds['otsu']))
+                            threshold=np.float32(thresholds['otsu']),
+                            cohort=config.COHORT, provenance=config.provenance())
         rows.append({'animal_number': animal, 'treatment': data_map.loc[animal, 'treatment'],
                      'threshold_otsu': thresholds['otsu'], 'volume_mm3': float(mask.sum()) * config.VOXEL_MM3})
         print(f'{animal}: volume {rows[-1]["volume_mm3"]:.0f} mm3, {time.time() - t0:.0f} s', flush=True)
         del image, mask
     pd.DataFrame(rows).to_csv(os.path.join(config.MASK_DIR, 'mask_summary.csv'), index=False)
     print(f'\nwrote {len(animals)} masks to {config.MASK_DIR} in {(time.time() - start) / 60:.1f} min')
+    print(f'manifest: {config.write_manifest("02_build_masks", {"masks_written": len(animals)})}')
 
 
 if __name__ == '__main__':
