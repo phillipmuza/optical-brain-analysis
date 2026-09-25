@@ -250,6 +250,16 @@ def main():
         print(line)
     print(config.describe(), '\n', flush=True)
 
+    if not (config.ATLAS_ANNOTATION and config.ATLAS_SPACE_DIR and config.THRESHOLD_SUMMARY):
+        raise SystemExit(
+            'step 05 needs its three atlas-space inputs for this cohort, and they are not set:\n'
+            '  atlas_annotation  - the annotation of config.ATLAS (ATLAS)\n'
+            '  atlas_space_dir   - per-animal volumes resampled to the atlas grid\n'
+            '  threshold_summary - that run\'s per animal x tracer thresholds\n'
+            'The resampling step that produces the latter two is not part of this repository, so\n'
+            'they only exist for a cohort it has already been run on. Steps 01-04 need no atlas\n'
+            'and are unaffected - this stage is optional.')
+
     os.makedirs(config.FIG_DIR, exist_ok=True)
     os.makedirs(config.OUT_DIR, exist_ok=True)
     brain, compartment_masks = atlas_compartments()

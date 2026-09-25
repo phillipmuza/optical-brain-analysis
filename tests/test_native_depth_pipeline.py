@@ -149,3 +149,21 @@ def test_a_cohort_entry_with_a_wrong_group_name_stops_before_any_work(synthetic_
         run_step(build_masks, monkeypatch)
     assert 'vanish from every figure' in str(raised.value)
     assert not os.listdir(config.MASK_DIR), 'nothing should have been written'
+
+
+def test_atlas_stage_refuses_cleanly_when_it_has_no_inputs(synthetic_cohort_fixture, monkeypatch):
+    """
+    Stage 05 is the one atlas-dependent step, and its two big inputs are produced outside this
+    repository. A cohort that has never been resampled to the atlas must say so, rather than fail
+    on an empty path or, worse, run on another cohort's volumes.
+    """
+    atlas_maps = importlib.import_module('05_atlas_maps')
+    with pytest.raises(SystemExit, match='three atlas-space inputs'):
+        run_step(atlas_maps, monkeypatch)
+
+
+def test_the_other_stages_need_no_atlas(synthetic_cohort_fixture, monkeypatch, tmp_path):
+    """01-04 run for a cohort with no atlas inputs configured at all - which is the normal case."""
+    for module in (build_masks, depth_profiles, analysis):
+        run_step(module, monkeypatch)
+    assert os.path.isdir(config.DEPTH_DIR)

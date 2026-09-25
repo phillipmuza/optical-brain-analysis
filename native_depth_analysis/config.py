@@ -74,9 +74,13 @@ COHORTS = {
         'data_dir': r'E:\tracer_uptake\wt_mice\new_analysis_0926',
         'data_map': r'E:\tracer_uptake\wt_mice\data_map.csv',
         'second_modality_csv': r'E:\tracer_uptake\wt_mice\ivis_raw_data\ex_vivo\brain_data.csv',
-        'atlas_annotation': r'E:\tracer_uptake\NS24122_intensity\atlas\annotation.tiff',
-        'atlas_space_dir': r'E:\tracer_uptake\NS24122_intensity\atlas_space',
-        'threshold_summary': r'E:\tracer_uptake\NS24122_intensity\threshold_summary.csv',
+        # Step 05 only. threshold_summary.csv sits next to the sibling project's scripts; ATLAS_DIR
+        # and atlas_space_images.OUT_DIR were Python constants in that project and their values were
+        # never visible from this repository, so both paths below are inferences to be corrected
+        # against it (E:\tracer_uptake is inferred from DATA_DIR above).
+        'atlas_annotation': r'E:\tracer_uptake\NS24122_intensity\atlas\annotation.tiff',  # TODO(confirm)
+        'atlas_space_dir': r'E:\tracer_uptake\NS24122_intensity\atlas_space',             # TODO(confirm)
+        'threshold_summary': r'E:\tracer_uptake\NS24122_intensity\threshold_summary.csv',# TODO(confirm)
         'mask_channel_is_tracer': 'FITC',
         'groups': [
             {'name': 'Vehicle', 'label': 'Vehicle', 'color': '#7f7f7f'},
@@ -97,9 +101,14 @@ COHORTS = {
         'data_dir': r'D:\anaesthetic_experiments\cleared_brains_new_analysis',
         'data_map': r'D:\anaesthetic_experiments\cleared_brains_new_analysis\data_map.csv',  # TODO(confirm)
         'second_modality_csv': None,                  # TODO(confirm): all cohorts have one
-        'atlas_annotation': r'D:\anaesthetic_experiments\atlas\annotation.tiff',    # TODO(confirm)
-        'atlas_space_dir': r'D:\anaesthetic_experiments\atlas_space',               # TODO(confirm)
-        'threshold_summary': r'D:\anaesthetic_experiments\threshold_summary.csv',   # TODO(confirm)
+        # Step 05 only, and unset: no atlas-space resampling has been run for this cohort, and the
+        # resampler itself lives in the sibling project (see README, "What is deliberately not
+        # here"). Leave these None until the per-animal atlas-space volumes exist, then point
+        # ATLAS_SPACE_DIR at them, THRESHOLD_SUMMARY at that run's threshold table and
+        # ATLAS_ANNOTATION at the annotation of config.ATLAS. Steps 01-04 never read them.
+        'atlas_annotation': None,
+        'atlas_space_dir': None,
+        'threshold_summary': None,
         'mask_channel_is_tracer': 'FITC',
         'groups': [
             {'name': 'Isoflurane', 'label': 'Isoflurane', 'color': '#7f7f7f'},
