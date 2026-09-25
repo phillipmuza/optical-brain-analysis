@@ -44,7 +44,7 @@ K_MAD = 5.0                   # tracer threshold = background + K_MAD robust SDs
 MASK_CLOSING_VOX = 2          # 40 um: closes thresholding pits without bridging real gaps
 ENVELOPE_CLOSING_VOX = 5      # 100 um: seals ventricles and clefts so they do not count as "surface"
 SUBSAMPLE = 4                 # stride when estimating thresholds from the histogram, for speed
-SLAB = 40                     # planes held in memory at once in 03
+SLAB = 40                     # planes per histogram pass in 03; bounds the per-pass temporaries only
 DEPTH_LO, DEPTH_HI, DEPTH_STEP = -0.4, 3.0, 0.02      # mm; negative = outside the brain surface
 SURFACE_MM = 0.5              # boundary between the surface and deep compartments; BANDS follow it
 
@@ -133,6 +133,11 @@ OUTSIDE_BAND = 'outside_surface'                           # (-inf, 0): measured
 INSIDE_BAND = 'inside_total'                               # (0, inf)
 BANDS = {SHALLOW_BAND: (0.0, 0.2), SURFACE_BAND: (0.0, SURFACE_MM),
          DEEP_BAND: (SURFACE_MM, float('inf')), INSIDE_BAND: (0.0, float('inf'))}
+
+# OUTSIDE_BAND is deliberately not in BANDS above. It is where the pial rim and the basal cisterns
+# sit - up to ~17% of the thresholded signal in these cohorts - so 03 measures it and 03's QC prints
+# it, but no band in 04 covers it and it never reaches the statistics. Putting it in BANDS would
+# change what is tested and how many comparisons there are: a scientific decision, not formatting.
 
 # --- names resolved by select(); do not edit ----------------------------------------------------
 COHORT = ''

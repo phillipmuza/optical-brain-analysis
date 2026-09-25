@@ -1,7 +1,7 @@
 r"""
 Does treatment change how much tracer reaches the brain surface? Measured without an atlas.
 
-Reads the depth profiles from native_depth.py (signal binned by distance below each animal's own
+Reads the depth profiles from 03_depth_profiles.py (signal binned by distance below each animal's own
 brain surface, dorsal and ventral separately) and asks three things:
 
   1. absolute  - integrated tracer signal in the surface shells, compared between groups. This is
@@ -39,6 +39,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # may take one as a default argument: both would freeze whichever cohort was selected first.
 
 
+# pingouin's output column names, and what this version of pingouin might call them instead. Only
+# the display and the p-value lookup depend on these, but both are load-bearing.
+TUKEY_COLUMNS = {'mean(A)': ('mean(A)', 'mean_A'), 'mean(B)': ('mean(B)', 'mean_B'),
+                 'diff': ('diff',), 'T': ('T',), 'p-tukey': ('p-tukey', 'p_tukey'),
+                 'hedges': ('hedges',)}
+
+
 def short(treatment):
     return config.short(treatment)
 
@@ -71,15 +78,6 @@ def load():
     return pd.DataFrame(rows), profiles, centres
 
 
-def exact_p(values, group_a, group_b):
-    """Two-sided exact permutation p over every re-assignment into groups of these sizes."""
-    pooled = sorted(group_a + group_b, key=config.sort_key)
-    observed = values[group_a].mean() - values[group_b].mean()
-    null = [values[[x for x in pooled if x not in b]].mean() - values[list(b)].mean()
-            for b in itertools.combinations(pooled, len(group_b))]
-    return float(np.mean(np.abs(null) >= abs(observed) - 1e-12))
-
-
 def anova_and_posthoc(df, measures):
     """
     One-way ANOVA of treatment on each measure, per tracer x region, then Tukey post-hoc.
@@ -93,10 +91,21 @@ def anova_and_posthoc(df, measures):
     import statsmodels.api as sm
     from statsmodels.formula.api import ols
 
-    anova_rows, posthoc = [], []
+    anova_rows, posthoc, skipped = [], [], []
     for tracer, side, measure in itertools.product(config.CHANNELS, config.SIDES, measures):
         d = (df[(df['tracer'] == tracer) & (df['side'] == side)][['animal', 'treatment', measure]]
              .rename(columns={measure: 'value'}))
+        values = d['value'].to_numpy(dtype=float)
+        # A measure that is undefined, or identical for every animal, cannot go into an ANOVA and
+        # statsmodels fails on it with an error about asymptotic normality that says nothing about
+        # the data. Skipping it - loudly - keeps one undefined measure from killing the run.
+        if not np.isfinite(values).all():
+            skipped.append(f'{tracer}/{side}/{measure}: undefined for {int(np.isnan(values).sum())} '
+                           f'of {len(values)} rows')
+            continue
+        if len(values) < 2 or np.std(values, ddof=1) == 0:
+            skipped.append(f'{tracer}/{side}/{measure}: identical for every animal, nothing to test')
+            continue
         table = sm.stats.anova_lm(ols('value ~ C(treatment)', data=d).fit(), typ=2)
         ss_between, ss_total = float(table['sum_sq'].iloc[0]), float(table['sum_sq'].sum())
         anova_rows.append({'tracer': tracer, 'region': side, 'measure': measure,
@@ -110,7 +119,27 @@ def anova_and_posthoc(df, measures):
         pairs.insert(0, 'region', side)
         pairs.insert(0, 'tracer', tracer)
         posthoc.append(pairs)
+    for note in skipped:
+        print(f'note: skipped {note}')
+    if not posthoc:
+        return pd.DataFrame(anova_rows), pd.DataFrame(columns=['tracer', 'region', 'measure', 'A', 'B'])
     return pd.DataFrame(anova_rows), pd.concat(posthoc, ignore_index=True)
+
+
+def tukey_column(pairs, name):
+    """
+    The column of pingouin's Tukey output holding one quantity, whichever way this version spells it.
+
+    pingouin 0.6 renamed mean(A) -> mean_A and p-tukey -> p_tukey, so a hardcoded list breaks on a
+    fresh environment with a KeyError that looks like a data problem. Failing with the available
+    columns instead says what to do about it.
+    """
+    for candidate in TUKEY_COLUMNS[name]:
+        if candidate in pairs.columns:
+            return candidate
+    raise SystemExit(f"pingouin's Tukey output has no {name!r} column (looked for "
+                     f"{TUKEY_COLUMNS[name]}); it has {list(pairs.columns)}. Add the new name to "
+                     f'TUKEY_COLUMNS in 04_analysis.py.')
 
 
 def tukey_p(posthoc, tracer, side, measure, treatment, reference=None):
@@ -119,7 +148,7 @@ def tukey_p(posthoc, tracer, side, measure, treatment, reference=None):
         reference = config.REFERENCE_GROUP
     d = posthoc[(posthoc['tracer'] == tracer) & (posthoc['region'] == side) & (posthoc['measure'] == measure)]
     hit = d[((d['A'] == treatment) & (d['B'] == reference)) | ((d['A'] == reference) & (d['B'] == treatment))]
-    return float(hit['p-tukey'].iloc[0]) if len(hit) else np.nan
+    return float(hit[tukey_column(posthoc, 'p-tukey')].iloc[0]) if len(hit) else np.nan
 
 
 def ivis_comparison(df):
@@ -170,7 +199,11 @@ def figures(df, profiles, centres, merged, correlations, anova_table, posthoc):
               for t in config.GROUP_ORDER}
 
     # 1. depth profiles by group
-    inside = centres >= 0          # negative-depth bins are empty by construction (see the QC note)
+    # Only depth >= 0 is drawn: this is the penetration profile. The negative bins are NOT empty -
+    # they hold the outside-surface compartment that 03 measures (up to ~17% of the thresholded
+    # signal) and that no entry in config.BANDS covers, so it appears in 03's QC printout and in the
+    # per-animal table but in none of the statistics. See config.OUTSIDE_BAND.
+    inside = centres >= 0
     fig, axes = plt.subplots(len(config.CHANNELS), len(config.SIDES), figsize=(13, 9), sharex=True)
     for (r, tracer), (c, side) in itertools.product(enumerate(config.CHANNELS), enumerate(config.SIDES)):
         ax = axes[r, c]
@@ -354,10 +387,15 @@ def main():
     print('\nOne-way ANOVA of treatment, per tracer x region (same procedure as the '
           f'{config.SECOND_MODALITY_NAME} analysis):')
     print(anova_table.to_string(index=False, float_format=lambda v: f'{v:.4g}'))
-    print('\nTukey post-hoc for the two compartment measures:')
-    print(posthoc[posthoc['measure'].isin([config.SURFACE_BAND, config.DEEP_BAND])]
-          [['tracer', 'region', 'measure', 'A', 'B', 'mean(A)', 'mean(B)', 'diff', 'T', 'p-tukey', 'hedges']]
-          .to_string(index=False, float_format=lambda v: f'{v:.4g}'))
+    compartments = posthoc[posthoc['measure'].isin([config.SURFACE_BAND, config.DEEP_BAND])]
+    if len(compartments):
+        show = (['tracer', 'region', 'measure', 'A', 'B']
+                + [tukey_column(posthoc, name) for name in ('mean(A)', 'mean(B)', 'diff', 'T',
+                                                            'p-tukey', 'hedges')])
+        print('\nTukey post-hoc for the two compartment measures:')
+        print(compartments[show].to_string(index=False, float_format=lambda v: f'{v:.4g}'))
+    else:
+        print('\nno Tukey post-hoc table for the compartments - see the notes above')
 
     merged, correlations = ivis_comparison(df)
     if correlations is None:        # no second modality configured; figures() handles this too

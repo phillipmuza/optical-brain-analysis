@@ -21,8 +21,10 @@ The mask is deliberately NOT convexified and NOT smoothed heavily: the whole poi
 true surface, because every measurement in the native-space analysis is referenced to it.
 
 Run:
-  python improve_mask.py --qc an4 an36 an16    # compare masks on a few animals, write figures
-  python improve_mask.py                       # all animals -> masks/<animal>.npz (bit-packed)
+  python 02_build_masks.py --qc an4 an36 an16   # compare masks on a few animals, write figures
+  python 02_build_masks.py                      # all animals -> masks/<animal>.npz (bit-packed)
+
+Add --cohort NAME to either to run a dataset other than the default (see config.py).
 """
 import argparse
 import os

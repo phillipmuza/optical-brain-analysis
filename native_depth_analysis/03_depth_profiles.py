@@ -86,6 +86,11 @@ def dorsal_mask(envelope):
     and each (anterior-posterior, left-right) column is split at its own mid-height. The split
     follows the shape of the brain rather than one global plane, which matters because the brain is
     not flat.
+
+    A column with no envelope voxels in it has no mid-height, so `mid` becomes inf and every voxel in
+    that column counts as dorsal. That only ever applies outside the brain, where the thresholded
+    measures have nothing anyway - but the all-voxel (sum_above_bg) histograms do include those
+    voxels, so the quirk is recorded in tests rather than assumed away.
     """
     dv = np.arange(envelope.shape[1], dtype=np.float32)[None, :, None]
     filled = np.where(envelope, dv, np.nan)
@@ -133,6 +138,10 @@ def animal_profile(animal):
             if not keep.any():
                 continue
             index = ((d - config.DEPTH_LO) / config.DEPTH_STEP).astype(np.int32)
+            # keep already restricts d to the binned range, so this only guards against float
+            # rounding at the top edge - but an index of n_bins makes bincount return a longer array,
+            # which would shift every dorsal bin by one instead of failing
+            np.clip(index, 0, n_bins - 1, out=index)
             index += np.where(dorsal[z0:z1], 0, n_bins)          # dorsal first, then ventral
             index = index[keep]
             above = (r[keep].astype(np.float32) - np.float32(bg))
