@@ -44,6 +44,13 @@ def decode_region_counts(counts_df, structures_file, volumes):
                        f"{structures_file} and will not appear in decoded_region_counts.csv: "
                        f"{unmatched['Region_ID'].tolist()}")
     decoded = pd.merge(structures, counts_df, left_on='id', right_on='Region_ID', how='left')
+    # brainreg's volumes.csv repeats id/structure_id_path from the atlas; merging it in as-is
+    # makes pandas suffix the collisions (id_x/id_y) so the decoded table has no plain 'id'
+    # column. Only the volume columns are wanted here.
+    redundant = [c for c in volumes.columns
+                 if c in decoded.columns and c != 'structure_name']
+    if redundant:
+        volumes = volumes.drop(columns=redundant)
     return pd.merge(decoded, volumes, left_on='name', right_on='structure_name', how='left')
 
 
