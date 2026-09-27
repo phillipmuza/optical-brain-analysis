@@ -28,6 +28,11 @@ Outputs (figures/):
   compartment_maps_<tracer>.png   group-mean signal across the brain, with the surface/deep boundary
                                   drawn and the dose/reference ratio underneath
   coronal_profile.png             integrated signal per coronal plane, hindbrain -> olfactory bulb
+  <tracer>_per_animal_absolute.png  one row per animal, one column per display plane, every animal
+                                    in ONE intensity window: a brightness difference between animals
+                                    is a difference in how much tracer arrived
+  <tracer>_per_animal_relative.png  the same layout with each animal divided by its own background,
+                                    which leaves only the distribution within each brain
 
 Run:  python 06_atlas_maps.py            # the dataset in config.py
 """
@@ -40,7 +45,9 @@ import tifffile
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import LinearSegmentedColormap, Normalize
+from matplotlib.lines import Line2D
 from scipy import ndimage
 
 import config
@@ -51,12 +58,32 @@ SMOOTH_SIGMA_VOX = 2.0          # 80 um: makes sparse above-threshold voxels leg
 CLOSING_RADIUS_VOX = 5                        # 100 um, the same envelope as everywhere else
 PLANES_MM = [1.5, 3.0, 4.5, 6.0, 7.2, 8.4, 9.4]
 DIVERGING = LinearSegmentedColormap.from_list('warm_cool', ['#4C72B0', '#F2F2F2', '#C1666B'])
+# The per-animal montage: 0 to this percentile of the signal-bearing voxels pooled over the cohort,
+# so every animal is drawn in one window. Grey, not black, where no sample voxel was placed - a
+# region the animal did not image must not read as a region with no signal.
+MONTAGE_PERCENTILE = 99.5
+NOT_IMAGED = '#3a3a3a'
+MONTAGE_DPI = 110
 
 
 def compartments():
     """The two compartment descriptions, with the boundary taken from config.SURFACE_MM."""
     return {'surface': f'brain surface to {config.SURFACE_MM:g} mm depth',
             'deep': f'deeper than {config.SURFACE_MM:g} mm'}
+
+
+def display_planes(brain):
+    """
+    The row indices of the display planes, for an atlas grid of this shape.
+
+    A grid can be smaller than PLANES_MM assumes (a smaller atlas, or a bigger ATLAS_BIN), so keep
+    the planes that exist and fall back to an even spread rather than indexing off the end.
+    """
+    planes = [int(round(mm / config.ATLAS_SPACING_MM)) for mm in PLANES_MM]
+    planes = [p for p in planes if 0 <= p < brain.shape[0]]
+    if not planes:
+        planes = list(np.linspace(0, brain.shape[0] - 1, min(6, brain.shape[0])).astype(int))
+    return planes
 
 
 def atlas_compartments():
@@ -106,6 +133,121 @@ def load_signal():
     return signal, covered, groups
 
 
+def load_raw_planes(groups, planes):
+    """
+    Every animal's raw atlas-space intensity, on the display planes only.
+
+    Read from 05's volumes with nothing applied to them: no threshold and no background subtraction.
+    That is what the per-animal montage is for - 05 saves raw intensities precisely so a figure can
+    window every animal together, and the per-animal view is the same data divided by the animal's
+    own background. Only the planes that are drawn are kept, so eighteen animals cost megabytes here
+    rather than the gigabytes the whole volumes would.
+    """
+    raw, covered, background = {}, {}, {}
+    for animal in sum(groups.values(), []):
+        with np.load(os.path.join(config.ATLAS_SPACE_DIR, f'{animal}.npz')) as data:
+            covered[animal] = data['n'][planes] > 0
+            for tracer in config.CHANNELS:
+                raw[(animal, tracer)] = data[tracer][planes].astype(np.float32)
+                background[(animal, tracer)] = float(data[f'bg_{tracer}'])
+    return raw, covered, background
+
+
+def montage_window(raw, background, groups, tracer, mode, n_voxels=20000):
+    """
+    The one display window the whole cohort is drawn in: 0 to the 99.5th percentile of the
+    signal-bearing voxels pooled across animals.
+
+    Pooled rather than per animal, and that is the whole point of the absolute view: a per-animal
+    window would normalise away exactly the between-animal differences it exists to show. The
+    subsample keeps the percentile cheap on a full atlas grid and is seeded, so the window does not
+    move between runs.
+    """
+    rng = np.random.default_rng(0)
+    sample = []
+    for animal in sum(groups.values(), []):
+        values = raw[(animal, tracer)].ravel()
+        values = values[values > 0]
+        if mode == 'relative':
+            values = (values - background[(animal, tracer)]) / background[(animal, tracer)]
+        if values.size:
+            sample.append(rng.choice(values, size=min(n_voxels, values.size), replace=False))
+    return 0.0, float(np.percentile(np.concatenate(sample), MONTAGE_PERCENTILE))
+
+
+def per_animal_maps(raw, covered, background, groups, tracer, mode, planes):
+    """
+    One row per animal, grouped by treatment, one column per coronal plane.
+
+    Two windowings of the same volumes, because they answer different questions:
+
+      absolute   one intensity window for every animal. Acquisition settings were identical across
+                 the cohort and the dose groups were randomised within imaging day, so a brightness
+                 difference between rows is a difference in how much tracer arrived - the view that
+                 corresponds to what the second modality measures, and the one every normalised
+                 metric removes.
+      relative   each animal divided by its own background, (intensity - background) / background,
+                 then one common window. This takes out any residual per-animal difference in laser,
+                 detector and tissue autofluorescence and leaves only the distribution within each
+                 brain.
+
+    Where the two disagree is where "more tracer" and "tracer arranged differently" part company.
+    Drawn without the atlas outline, deliberately: the outline sits on the surface rim that carries
+    the effect, and over these sections it obscures the thing being shown.
+    """
+    animals = sum((groups[t] for t in config.GROUP_ORDER), [])
+    treatment_of = {a: t for t, members in groups.items() for a in members}
+    vmin, vmax = montage_window(raw, background, groups, tracer, mode)
+    cmap = plt.get_cmap('magma').copy()
+    cmap.set_bad(NOT_IMAGED)
+    fig, axes = plt.subplots(len(animals), len(planes),
+                             figsize=(2.05 * len(planes), 1.55 * len(animals)), squeeze=False)
+    for row, animal in enumerate(animals):
+        bg = background[(animal, tracer)]
+        for col in range(len(planes)):
+            ax = axes[row, col]
+            image = raw[(animal, tracer)][col]
+            if mode == 'relative':
+                image = (image - bg) / bg
+            ax.imshow(np.where(covered[animal][col], image, np.nan), cmap=cmap, vmin=vmin,
+                      vmax=vmax, interpolation='nearest')
+            ax.set_axis_off()
+            if row == 0:
+                ax.set_title(f'{planes[col] * config.ATLAS_SPACING_MM:.1f} mm', fontsize=10)
+        axes[row, 0].text(-0.05, 0.5, animal, transform=axes[row, 0].transAxes, ha='right',
+                          va='center', fontsize=10, color=config.GROUP_COLORS[treatment_of[animal]],
+                          fontweight='bold')
+
+    # one label and one rule per treatment block, so where a group starts is not something the
+    # reader has to infer from the row labels
+    y_top = 0.945
+    for treatment in config.GROUP_ORDER:
+        n = len(groups[treatment])
+        height = n / len(animals) * 0.95
+        fig.text(0.022, y_top - height / 2, f'{config.short(treatment)}  (n = {n})', rotation=90,
+                 va='center', ha='center', fontsize=12, color=config.GROUP_COLORS[treatment],
+                 fontweight='bold')
+        y_top -= height
+        if treatment != config.GROUP_ORDER[-1]:
+            fig.add_artist(Line2D([0.06, 0.93], [y_top, y_top], color='#cccccc', linewidth=1))
+
+    label = ('raw intensity (one window for every animal)' if mode == 'absolute'
+             else '(intensity − background) / background, per animal')
+    fig.subplots_adjust(left=0.10, right=0.93, top=0.945, bottom=0.01, wspace=0.02, hspace=0.05)
+    cax = fig.add_axes((0.94, 0.35, 0.012, 0.3))
+    # the window itself, not the last artist drawn: every panel was drawn in it, and saying so is
+    # what the colour bar is for
+    fig.colorbar(ScalarMappable(norm=Normalize(vmin, vmax), cmap=cmap), cax=cax, label=label)
+    fig.suptitle(f'{tracer}: coronal sections — '
+                 f'{"ABSOLUTE" if mode == "absolute" else "PER-ANIMAL"} scaling\n'
+                 f'{label}; grey = not imaged in that animal',
+                 x=0.10, y=0.997, va='top', ha='left', fontsize=13)
+    path = os.path.join(config.FIG_DIR, f'{tracer}_per_animal_{mode}.png')
+    fig.savefig(path, dpi=MONTAGE_DPI)
+    plt.close(fig)
+    print(f'wrote {path}')
+
+
 def compartment_maps(signal, covered, groups, brain, compartment_masks, tracer):
     """
     Group-mean signal across the brain, with the surface / deep boundary drawn on.
@@ -116,12 +258,7 @@ def compartment_maps(signal, covered, groups, brain, compartment_masks, tracer):
     within the brain - dividing by the smoothed validity mask keeps the edges from being pulled
     towards zero. It is a local density of tracer signal, not a new quantity.
     """
-    planes = [int(round(mm / config.ATLAS_SPACING_MM)) for mm in PLANES_MM]
-    # A grid can be smaller than PLANES_MM assumes (a smaller atlas, or a bigger ATLAS_BIN), so keep
-    # the planes that exist and fall back to an even spread rather than indexing off the end.
-    planes = [p for p in planes if 0 <= p < brain.shape[0]]
-    if not planes:
-        planes = list(np.linspace(0, brain.shape[0] - 1, min(6, brain.shape[0])).astype(int))
+    planes = display_planes(brain)
     means = {}
     for treatment in config.GROUP_ORDER:
         total = np.zeros(brain.shape, np.float32)
@@ -142,7 +279,7 @@ def compartment_maps(signal, covered, groups, brain, compartment_masks, tracer):
 
     vmax = float(np.nanpercentile(np.concatenate([m.ravel() for m in means.values()]), 99.5))
     cmap = plt.get_cmap('magma').copy()
-    cmap.set_bad('#3a3a3a')
+    cmap.set_bad(NOT_IMAGED)
     n_rows = len(config.GROUP_ORDER) + len(config.GROUP_ORDER[1:])
     fig, axes = plt.subplots(n_rows, len(planes), figsize=(2.15 * len(planes), 1.85 * n_rows), squeeze=False)
 
@@ -274,6 +411,14 @@ def main():
     for tracer in config.CHANNELS:
         compartment_maps(signal, covered, groups, brain, compartment_masks, tracer)
     coronal_profile(signal, covered, groups, brain, compartment_masks)
+
+    # the per-animal montage, from the same volumes read raw: one window for the whole cohort in the
+    # absolute view, each animal against its own background in the relative one
+    planes = display_planes(brain)
+    raw, plane_coverage, background = load_raw_planes(groups, planes)
+    for tracer in config.CHANNELS:
+        for mode in ('absolute', 'relative'):
+            per_animal_maps(raw, plane_coverage, background, groups, tracer, mode, planes)
     print(f'manifest: {config.write_manifest("05_atlas_maps", {"groups": {t: len(m) for t, m in groups.items()}})}')
 
 

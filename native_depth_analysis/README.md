@@ -244,10 +244,26 @@ that produced them) and `threshold_summary.csv` next to them.
 
 ### 6. `06_atlas_maps.py`
 
-The atlas-space figures, from step 05's outputs: group-mean signal across the brain with the
-surface/deep boundary drawn and the dose/reference ratio underneath, and the integrated signal per
-coronal plane from hindbrain to olfactory bulb. Display only - no statistic in this pipeline is
-computed from atlas space, and 01-04 run with no atlas at all.
+The atlas-space figures, from step 05's outputs. Display only - no statistic in this pipeline is
+computed from atlas space, and 01-04 run with no atlas at all:
+
+- **group means** — signal across the brain with the surface/deep boundary drawn and the
+  dose/reference ratio underneath (`compartment_maps_<tracer>.png`), and the integrated signal per
+  coronal plane from hindbrain to olfactory bulb (`coronal_profile.png`).
+- **per animal** — one row per animal, grouped by treatment, one column per coronal plane
+  (`<tracer>_per_animal_<mode>.png`), in the two windowings that answer different questions.
+  *absolute* puts every animal in one intensity window, so a brighter row is an animal with more
+  tracer. That is only meaningful because acquisition settings were identical across the cohort and
+  the groups were randomised within imaging day; it is the view that corresponds to what the second
+  modality measures. *relative* divides each animal by its own background,
+  `(intensity - background) / background`, which removes any residual per-animal difference in
+  laser, detector and tissue autofluorescence and leaves only how the tracer is distributed within
+  the brain. Voxels no sample reached are grey, not black, so a region an animal did not image is
+  not read as a region with no signal. Where the two views disagree is where "more tracer" and
+  "tracer arranged differently" part company.
+
+Both windowings read the volumes raw — no threshold, no background subtraction — because that is
+what 05 saves them for. The surface/deep statistics in 04 come from native space and are unaffected.
 
 ## Things to keep in mind when reading the results
 

@@ -199,10 +199,14 @@ def test_atlas_stage_refuses_when_05_has_not_run(synthetic_cohort_fixture, monke
 
 
 def test_atlas_stage_runs_once_05_has(synthetic_cohort_fixture, monkeypatch):
-    """The whole atlas arm: 05 then 06, ending in the two figures and their tables."""
+    """The whole atlas arm: 05 then 06, ending in the figures and their tables."""
     run_step(atlas_space, monkeypatch)
     run_step(atlas_maps, monkeypatch)
-    for figure in ('compartment_maps_FITC.png', 'compartment_maps_TxR.png', 'coronal_profile.png'):
+    figures = ['compartment_maps_FITC.png', 'compartment_maps_TxR.png', 'coronal_profile.png']
+    # the per-animal montage, one figure per tracer and windowing
+    figures += [f'{tracer}_per_animal_{mode}.png'
+                for tracer in config.CHANNELS for mode in ('absolute', 'relative')]
+    for figure in figures:
         path = os.path.join(config.FIG_DIR, figure)
         assert os.path.getsize(path) > 0, f'{figure} was not written'
     assert os.path.getsize(os.path.join(config.OUT_DIR, 'coronal_profile_totals.csv')) > 0
