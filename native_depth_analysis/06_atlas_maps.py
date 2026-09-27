@@ -343,7 +343,8 @@ def coronal_profile(signal, covered, groups, brain, compartment_masks):
                              'total': float(np.nansum(per_plane))})
     pd.DataFrame(rows).to_csv(os.path.join(config.OUT_DIR, 'coronal_profile_totals.csv'), index=False)
 
-    fig, axes = plt.subplots(len(config.CHANNELS), len(compartments()), figsize=(14, 8.5), sharex=True)
+    fig, axes = plt.subplots(len(config.CHANNELS), len(compartments()), figsize=(14, 8.5),
+                             sharex=True, squeeze=False)
     for r, tracer in enumerate(config.CHANNELS):
         for c, (name, description) in enumerate(compartments().items()):
             ax = axes[r, c]
