@@ -246,10 +246,14 @@ Outputs: `depth/<animal>.npz`, `qc/<animal>_native_depth.png`.
 Statistics and figures:
 
 - **absolute** — integrated signal in the surface (0–0.5 mm) and deep (> 0.5 mm) compartments,
-  compared between groups. Type II ANOVA per tracer × region, then Tukey post-hoc (statsmodels +
+  compared between groups. Type II ANOVA per tracer × region, then pairwise comparisons (statsmodels +
   pingouin, reporting Hedges' g). For a single-factor cohort that ANOVA has one term; for a factorial
   one it is `~ factor1 * factor2`, fitting both main effects and the interaction, and the table gains
-  a `term` column saying which is which.
+  a `term` column saying which is which. The figure brackets the **uncorrected** pairwise p-values and
+  says so on the figure; `native_depth_posthoc_tukey.csv` carries both, `p_unc` beside pingouin's
+  corrected `p_tukey`. pingouin 0.6.1 no longer returns an uncorrected p, so 04 computes it from the
+  statistic pingouin corrects - the pooled-variance t, `2 * sf(|T|, df_resid)` - which is the p an
+  unadjusted pairwise t-test would give on the model's own pooled variance.
 - **relative** — the fraction of each animal's signal that is deep, i.e. the penetration question.
 - **agreement** — per-animal correlation against the second modality, if configured.
 
@@ -324,7 +328,9 @@ what 05 saves them for. The surface/deep statistics in 04 come from native space
   simple effects, per tracer × region, is 28 tests rather than 12 - and 28 draws from a uniform p
   distribution produce one below 0.05 all by themselves. Decide the claim before the run and report
   the interaction, or one named contrast, as the test; the rest is a follow-up set and has to be read
-  as one.
+  as one. The headline figure brackets **uncorrected** pairwise p-values by choice: they are the
+  exploratory display, the corrected `p_tukey` sits beside them in the table, and a bracket is a
+  screen to decide what to look at next rather than a result to quote.
 - **Light phase is a clock time, not just a label.** An animal dosed and imaged in its Lights ON period
   is in a different circadian and arousal state from one in Lights OFF, and glymphatic clearance
   depends on both. That is the point of the factor, but it has two consequences: an ON vs OFF

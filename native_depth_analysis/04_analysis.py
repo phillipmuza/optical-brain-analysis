@@ -174,6 +174,8 @@ def anova_and_posthoc(df, measures):
                                'eta_sq': ss / (ss + ss_resid) if ss_resid else np.nan,
                                **means})
         pairs = pg.pairwise_tukey(data=d, dv='value', between='treatment')
+        # the uncorrected p, next to pingouin's corrected one: see uncorrected_pairwise_p()
+        pairs['p_unc'] = uncorrected_pairwise_p(pairs, df_resid)
         pairs.insert(0, 'measure', measure)
         pairs.insert(0, 'region', side)
         pairs.insert(0, 'tracer', tracer)
@@ -224,13 +226,41 @@ def tukey_column(pairs, name):
                      f'TUKEY_COLUMNS in 04_analysis.py.')
 
 
-def tukey_p(posthoc, tracer, side, measure, treatment, reference=None):
-    """The Tukey p for one pair, whichever way round pingouin listed it."""
+def tukey_p(posthoc, tracer, side, measure, treatment, reference=None, column='p_unc'):
+    """
+    One pairwise p for one pair, whichever way round pingouin listed it.
+
+    `column` is 'p_unc' (the uncorrected p, what the figures show and say they show) or 'p_tukey'
+    (the Tukey-corrected one, kept in the table next to it).
+    """
     if reference is None:
         reference = config.REFERENCE_GROUP
     d = posthoc[(posthoc['tracer'] == tracer) & (posthoc['region'] == side) & (posthoc['measure'] == measure)]
     hit = d[((d['A'] == treatment) & (d['B'] == reference)) | ((d['A'] == reference) & (d['B'] == treatment))]
-    return float(hit[tukey_column(posthoc, 'p-tukey')].iloc[0]) if len(hit) else np.nan
+    if not len(hit):
+        return np.nan
+    if column == 'p_unc':
+        return float(hit['p_unc'].iloc[0])
+    return float(hit[tukey_column(posthoc, 'p-tukey')].iloc[0])
+
+
+def uncorrected_pairwise_p(pairs, df_resid):
+    """
+    The uncorrected pairwise p for pingouin's Tukey rows.
+
+    pingouin 0.6.1's pairwise_tukey reports only the Tukey-corrected p: it has no p-unc column, which
+    earlier versions carried. The statistic it corrects is the pooled-variance t for the difference -
+    the 'T' it reports, with the model's residual degrees of freedom - so the uncorrected p is that
+    statistic read off a t distribution instead of the studentized range:
+
+        p_unc = 2 * sf(|T|, df_resid)
+
+    Which is the p an unadjusted pairwise t-test would give for the same pair, on the same pooled
+    variance the model already estimated. The figure shows this and says it is uncorrected; the
+    Tukey-corrected p stays in the table beside it, and p_tukey >= p_unc always.
+    """
+    t = pairs[tukey_column(pairs, 'T')].to_numpy(dtype=float)
+    return 2 * stats.t.sf(np.abs(t), df_resid)
 
 
 def ivis_comparison(df):
@@ -315,7 +345,8 @@ def figures(df, profiles, centres, merged, correlations, anova_table, posthoc):
     plt.savefig(os.path.join(config.FIG_DIR, 'native_depth_profiles.png'), dpi=120)
     plt.close(fig)
 
-    # 2. headline: the two compartments, both as absolute integrated signal, with ANOVA and Tukey
+    # 2. headline: the two compartments, both as absolute integrated signal, with the model terms
+    # and the uncorrected pairwise p the figure brackets (Tukey-corrected in the table beside it)
     compartments = ((config.SURFACE_BAND,
                      f'Integrated signal from the brain surface to {config.SURFACE_MM:g} mm depth'),
                     (config.DEEP_BAND,
@@ -336,7 +367,9 @@ def figures(df, profiles, centres, merged, correlations, anova_table, posthoc):
                            color=config.GROUP_COLORS[treatment],
                            edgecolor='black', linewidth=0.7, zorder=3)
                 top = max(top, float(v.max()))
-            # Tukey brackets for each dose against the reference group, and the ANOVA p in the title
+            # Tukey brackets for each dose against the reference group, and the ANOVA p in the title.
+            # These are the UNCORRECTED pairwise p-values, deliberately: the figure says so in its
+            # title, and the Tukey-corrected p is in native_depth_posthoc_tukey.csv alongside.
             step = top * 0.09
             for k, (treatment, reference) in enumerate(config.CONTRASTS):
                 p = tukey_p(posthoc, tracer, side, measure, treatment, reference)
@@ -363,9 +396,12 @@ def figures(df, profiles, centres, merged, correlations, anova_table, posthoc):
                 ax.set_ylabel(label, fontsize=10)
             ax.spines[['top', 'right']].set_visible(False)
     fig.suptitle('Integrated tracer signal by compartment: '
-                 + (f'{" x ".join(config.FACTOR_COLUMNS)} model, Tukey post-hoc'
-                    if len(config.FACTOR_COLUMNS) > 1 else 'one-way ANOVA of treatment, Tukey post-hoc'),
-                 x=0.01, ha='left', fontsize=13)
+                 + (f'{" x ".join(config.FACTOR_COLUMNS)} model, pairwise p UNCORRECTED\n'
+                    if len(config.FACTOR_COLUMNS) > 1
+                    else 'one-way ANOVA of treatment, pairwise p UNCORRECTED\n')
+                 + 'brackets: uncorrected pairwise p (Tukey-corrected p in '
+                   'native_depth_posthoc_tukey.csv); model terms are unadjusted too',
+                 x=0.01, ha='left', fontsize=12)
     plt.tight_layout(rect=(0, 0, 1, 0.96))
     plt.savefig(os.path.join(config.FIG_DIR, 'native_depth_headline.png'), dpi=120)
     plt.close(fig)
@@ -473,8 +509,9 @@ def interaction_figure(df, anova_table):
             if row == 0 and col == 0:
                 ax.legend(frameon=False, fontsize=9, title=first)
             ax.spines[['top', 'right']].set_visible(False)
-    fig.suptitle(f'Does the {first} effect depend on {second}? (group mean ± SEM)',
-                 x=0.01, ha='left', fontsize=13)
+    fig.suptitle(f'Does the {first} effect depend on {second}? (group mean ± SEM)\n'
+                 f'model p-values are unadjusted (one test per term, no multiplicity correction)',
+                 x=0.01, ha='left', fontsize=12)
     plt.tight_layout(rect=(0, 0, 1, 0.95))
     path = os.path.join(config.FIG_DIR, 'native_depth_interaction.png')
     plt.savefig(path, dpi=120)
@@ -545,9 +582,10 @@ def main():
     compartments = posthoc[posthoc['measure'].isin([config.SURFACE_BAND, config.DEEP_BAND])]
     if len(compartments):
         show = (['tracer', 'region', 'measure', 'A', 'B']
-                + [tukey_column(posthoc, name) for name in ('mean(A)', 'mean(B)', 'diff', 'T',
-                                                            'p-tukey', 'hedges')])
-        print('\nTukey post-hoc for the two compartment measures:')
+                + [tukey_column(posthoc, name) for name in ('mean(A)', 'mean(B)', 'diff', 'T')]
+                + ['p_unc', tukey_column(posthoc, 'p-tukey'), tukey_column(posthoc, 'hedges')])
+        print('\nPairwise comparisons for the two compartment measures. The figures bracket p_unc - '
+              'uncorrected, as they state; p_tukey is pingouin\'s studentized-range correction:')
         print(compartments[show].to_string(index=False, float_format=lambda v: f'{v:.4g}'))
     else:
         print('\nno Tukey post-hoc table for the compartments - see the notes above')

@@ -304,6 +304,63 @@ class TestTheStatistics:
         assert set(config.short(cell) for cell in config.GROUP_ORDER) <= set(anova.columns)
 
 
+class TestUncorrectedPairwiseP:
+    """
+    The figures bracket uncorrected pairwise p-values, and say so on the figure.
+
+    pingouin 0.6.1's pairwise_tukey returns only the Tukey-corrected p (it lost the p-unc column
+    earlier versions had), so the uncorrected one is computed from the statistic it corrects. These
+    tests pin that number to the definition rather than to the code that produces it.
+    """
+
+    def test_with_two_groups_it_is_the_ordinary_pooled_t_test(self, synthetic_cohort_fixture):
+        """
+        The sharpest available check: with two groups, MS_within is the pooled variance of those two
+        groups, so the uncorrected pairwise p must equal scipy's pooled two-sample t-test exactly.
+        """
+        from scipy import stats as scipy_stats
+
+        rng = np.random.default_rng(1)
+        groups = config.GROUP_ORDER[:2]
+        rows = []
+        for k, cell in enumerate(groups):
+            for j in range(6):
+                rows.append({'animal': f'{cell[:4]}{j}', 'treatment': cell, 'tracer': 'FITC',
+                             'side': 'dorsal', config.SURFACE_BAND: 100.0 + 12.0 * k + rng.normal(0, 7)})
+        df = pd.DataFrame(rows)
+        anova, posthoc = analysis.anova_and_posthoc(df, [config.SURFACE_BAND])
+        pair = posthoc.iloc[0]
+        a = df.loc[df['treatment'] == pair['A'], config.SURFACE_BAND]
+        b = df.loc[df['treatment'] == pair['B'], config.SURFACE_BAND]
+        expected = scipy_stats.ttest_ind(a, b, equal_var=True).pvalue
+        assert float(pair['p_unc']) == pytest.approx(expected, rel=1e-9)
+
+    def test_the_correction_only_ever_increases_the_p(self, factorial_cohort_fixture):
+        """Tukey's adjustment cannot make a comparison look better than the uncorrected p."""
+        df = cell_frame(effect_on=40.0, effect_off=-25.0)
+        _, posthoc = analysis.anova_and_posthoc(df, [config.SURFACE_BAND])
+        assert len(posthoc) == 6, 'four cells, six pairs'
+        corrected = posthoc[analysis.tukey_column(posthoc, 'p-tukey')].to_numpy(dtype=float)
+        uncorrected = posthoc['p_unc'].to_numpy(dtype=float)
+        assert np.all(corrected >= uncorrected - 1e-12), 'the adjusted p must not be smaller'
+        assert np.any(corrected > uncorrected), 'and it should differ somewhere, or nothing is adjusted'
+
+    def test_a_figure_bracket_reads_the_uncorrected_column_by_default(self, factorial_cohort_fixture):
+        df = cell_frame(effect_on=40.0, effect_off=-25.0)
+        _, posthoc = analysis.anova_and_posthoc(df, [config.SURFACE_BAND])
+        cell, reference = config.CONTRASTS[0]
+        assert analysis.tukey_p(posthoc, 'FITC', 'dorsal', config.SURFACE_BAND, cell, reference) == \
+            pytest.approx(float(posthoc.loc[
+                ((posthoc['A'] == cell) & (posthoc['B'] == reference))
+                | ((posthoc['A'] == reference) & (posthoc['B'] == cell)), 'p_unc'].iloc[0]))
+        # and the corrected one is still reachable, which is what the table beside it carries
+        assert analysis.tukey_p(posthoc, 'FITC', 'dorsal', config.SURFACE_BAND, cell, reference,
+                                column='p_tukey') == pytest.approx(float(posthoc.loc[
+                                    ((posthoc['A'] == cell) & (posthoc['B'] == reference))
+                                    | ((posthoc['A'] == reference) & (posthoc['B'] == cell)),
+                                    analysis.tukey_column(posthoc, 'p-tukey')].iloc[0]))
+
+
 class TestEndToEnd:
     def test_the_factorial_cohort_runs_through_02_03_and_04(self, factorial_pipeline, monkeypatch, capsys):
         run_step(analysis, monkeypatch)
