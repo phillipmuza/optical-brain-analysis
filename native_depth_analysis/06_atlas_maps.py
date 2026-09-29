@@ -115,7 +115,6 @@ def load_signal():
                          f'{list(summary.columns)}. This table comes from the intensity work; point '
                          f'config.THRESHOLD_SUMMARY at it, or relax the column names here.')
     thresholds = summary.set_index(key_columns)
-    data_map = config.load_data_map()
     animals = sorted([f[:-4] for f in os.listdir(config.ATLAS_SPACE_DIR)
                       if f.endswith('.npz') and f[:-4] not in config.EXCLUDE_ANIMALS],
                      key=config.sort_key)
@@ -123,7 +122,7 @@ def load_signal():
     for animal in animals:
         data = dict(np.load(os.path.join(config.ATLAS_SPACE_DIR, f'{animal}.npz')))
         covered[animal] = data['n'] > 0
-        treatment_of[animal] = data_map.loc[animal, 'treatment']
+        treatment_of[animal] = config.treatment_of(animal)
         for tracer in config.CHANNELS:
             value = data[tracer].astype(np.float32)
             bg = float(data[f'bg_{tracer}'])
@@ -248,6 +247,21 @@ def per_animal_maps(raw, covered, background, groups, tracer, mode, planes):
     print(f'wrote {path}')
 
 
+def ratio_to_reference(means, group, index):
+    """
+    One group's mean map over the reference group's, on one display plane, as log2.
+
+    `index` is the position among the drawn planes, not the plane's index on the brain grid: means[] is
+    built from the drawn planes only.
+
+    Over the reference group and not over whichever group is listed first. For the three-group cohorts
+    those were the same group; for a factorial cohort they need not be, and dividing by the wrong one
+    would draw a perfectly plausible map of the wrong comparison.
+    """
+    with np.errstate(invalid='ignore', divide='ignore'):
+        return np.log2((means[group][index] + 1) / (means[config.REFERENCE_GROUP][index] + 1))
+
+
 def compartment_maps(signal, covered, groups, brain, compartment_masks, tracer):
     """
     Group-mean signal across the brain, with the surface / deep boundary drawn on.
@@ -280,7 +294,10 @@ def compartment_maps(signal, covered, groups, brain, compartment_masks, tracer):
     vmax = float(np.nanpercentile(np.concatenate([m.ravel() for m in means.values()]), 99.5))
     cmap = plt.get_cmap('magma').copy()
     cmap.set_bad(NOT_IMAGED)
-    n_rows = len(config.GROUP_ORDER) + len(config.GROUP_ORDER[1:])
+    # the ratio row goes to the reference group, not to whichever group happens to be listed first:
+    # for a three-group cohort those were the same thing by luck, and for a 2x2 they need not be
+    others = [t for t in config.GROUP_ORDER if t != config.REFERENCE_GROUP]
+    n_rows = len(config.GROUP_ORDER) + len(others)
     fig, axes = plt.subplots(n_rows, len(planes), figsize=(2.15 * len(planes), 1.85 * n_rows), squeeze=False)
 
     def boundary(ax, plane):
@@ -299,23 +316,22 @@ def compartment_maps(signal, covered, groups, brain, compartment_masks, tracer):
         axes[row, 0].text(-0.05, 0.5, config.short(treatment), transform=axes[row, 0].transAxes,
                           rotation=90, ha='right', va='center', fontsize=11,
                           color=config.GROUP_COLORS[treatment], fontweight='bold')
-    for k, treatment in enumerate(config.GROUP_ORDER[1:]):
+    for k, treatment in enumerate(others):
         for col, plane in enumerate(planes):
             ax = axes[len(config.GROUP_ORDER) + k, col]
-            with np.errstate(invalid='ignore', divide='ignore'):
-                ratio = np.log2((means[treatment][col] + 1) / (means[config.GROUP_ORDER[0]][col] + 1))
-            rim = ax.imshow(ratio, cmap=DIVERGING, vmin=-2, vmax=2, interpolation='nearest')
+            rim = ax.imshow(ratio_to_reference(means, treatment, col), cmap=DIVERGING, vmin=-2,
+                            vmax=2, interpolation='nearest')
             boundary(ax, plane)
             ax.set_axis_off()
         axes[len(config.GROUP_ORDER) + k, 0].text(
-            -0.05, 0.5, f'log2 {config.short(treatment)}\n/ {config.short(config.GROUP_ORDER[0])}',
+            -0.05, 0.5, f'log2 {config.short(treatment)}\n/ {config.short(config.REFERENCE_GROUP)}',
             transform=axes[len(config.GROUP_ORDER) + k, 0].transAxes, rotation=90, ha='right',
             va='center', fontsize=9)
 
     fig.colorbar(im, ax=axes[:len(config.GROUP_ORDER), :], fraction=0.012, pad=0.01,
                  label='mean tracer signal above background')
     fig.colorbar(rim, ax=axes[len(config.GROUP_ORDER):, :], fraction=0.012, pad=0.01,
-                 label=f'log$_2$ ratio to {config.short(config.GROUP_ORDER[0])}')
+                 label=f'log$_2$ ratio to {config.short(config.REFERENCE_GROUP)}')
     fig.suptitle(f'{tracer}: tracer signal across the brain — group means\n'
                  f'dashed line = {config.SURFACE_MM:g} mm below the surface; outside it is the surface '
                  'compartment, inside it the deep compartment', x=0.01, ha='left', fontsize=13)

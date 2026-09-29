@@ -217,3 +217,29 @@ def test_step_05_needs_the_atlas_annotation(synthetic_cohort_fixture, monkeypatc
     config.resolve()
     with pytest.raises(SystemExit, match='needs the atlas annotation'):
         run_step(atlas_space, monkeypatch)
+
+
+def test_the_ratio_maps_divide_by_the_reference_group(factorial_cohort_fixture):
+    """
+    The ratio row of each compartment map is against the reference group, not against whichever group
+    happens to be listed first.
+
+    In the three-group cohorts those were the same group, so dividing by the first one was right by
+    luck. Here they are deliberately different, and the numbers are chosen so the two answers are
+    distinguishable by hand: 4/2 is 1, and dividing by the first group instead would give 0.
+    """
+    config.DATASET['reference_group'] = config.cell_name(('DRUG', 'LightsOFF'))
+    config.resolve()
+    first = config.GROUP_ORDER[0]
+    assert config.REFERENCE_GROUP != first, 'this test is vacuous unless the two differ'
+
+    target = config.cell_name(('DRUG', 'LightsON'))
+    plane = np.zeros((2, 2), dtype=np.float32)
+    means = {cell: [plane.copy()] for cell in config.GROUP_ORDER}
+    means[target][0][:] = 3.0                      # log2((3 + 1) / (1 + 1)) = 1
+    means[config.REFERENCE_GROUP][0][:] = 1.0
+    means[first][0][:] = 63.0                      # log2((3 + 1) / (63 + 1)) = -4
+
+    ratio = atlas_maps.ratio_to_reference(means, target, 0)
+    assert float(ratio[0, 0]) == pytest.approx(1.0)
+    assert float(ratio[0, 0]) != pytest.approx(-4.0), 'that is the first group, not the reference'
