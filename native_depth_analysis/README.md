@@ -58,8 +58,8 @@ intensity. Randomising treatment groups across imaging sessions is strongly advi
 imaged on a different day from group B with a different laser setting, this pipeline will happily
 report that difference as biology.
 
-You also need a data map (CSV) with one row per animal, giving an animal id column and a treatment
-column.
+You also need a data map (CSV) with one row per animal, giving an animal id column and a group column
+- or, for a factorial design, one column per factor. See "A factorial design" under "Configuring it".
 
 A second modality (here IVIS) is optional. If you have one, step 4 will cross-validate against it per
 animal; if not, set `second_modality_csv: None` for that cohort and that section is skipped.
@@ -100,6 +100,45 @@ a copy of `config.py` per dataset. `config.py` also carries the anaesthetic seri
 `ANAESTHETIC_DATASET`, an example of the other shape - three groups whose names are the anaesthetic
 conditions, isoflurane as the control, everything else identical - so switching is a copy-paste of
 that block.
+
+### A factorial design (two factors, four cells)
+
+A group is the combination of one level from each factor column, so a cohort with two factors is
+declared by naming them rather than by typing four group names that have to stay in step with them:
+
+```python
+    'factor_columns': ['drug', 'light'],
+    'factor_levels':  {'drug': ['Vehicle', 'DRUG'],
+                       'light': ['LightsON', 'LightsOFF']},
+    'groups': [                              # the cells, in figure order
+        {'name': 'Vehicle x LightsON',  'label': 'Veh ON',   'color': '#7f7f7f'},
+        {'name': 'DRUG x LightsON',     'label': 'Drug ON',  'color': '#4C72B0'},
+        {'name': 'Vehicle x LightsOFF', 'label': 'Veh OFF',  'color': '#b0b0b0'},
+        {'name': 'DRUG x LightsOFF',    'label': 'Drug OFF', 'color': '#C1666B'},
+    ],
+    'reference_group': 'Vehicle x LightsON',
+    'contrasts': [('DRUG x LightsON', 'Vehicle x LightsON'),      # each factor within
+                  ('DRUG x LightsOFF', 'Vehicle x LightsOFF'),    # each level of the other
+                  ('Vehicle x LightsOFF', 'Vehicle x LightsON'),
+                  ('DRUG x LightsOFF', 'DRUG x LightsON')],
+```
+
+`config.py` also carries this as `DRUG_2X2_DATASET`, with the paths to fill in.
+
+The data map then needs one column per factor - here `drug` and `light`, not one `treatment` column -
+and the cell names are built from the levels joined by `' x '`, so `factor_levels` and `groups` cannot
+drift apart: `validate()` recomputes the cells and stops if they have. A factor column may not be
+named `treatment`, because that is the name of the group column in the pipeline's own output tables;
+`validate()` stops on that too.
+
+What changes is the statistics, not the measurement. Steps 01-03, 05 and 06 treat the four cells as
+four groups exactly as before, and step 04 fits `~ C(drug) * C(light)` - both main effects and the
+interaction - alongside the four-cell Tukey. Steps 02 and 04 read group membership from the data map
+rather than from each animal's saved profile, so relabelling a cohort, or declaring its factors
+differently, costs a re-run of 04 (seconds) and not of 03 (90 minutes).
+
+A cell with fewer than three animals is a warning, not an error: it is a design decision, but it
+cannot carry an interaction term, and `validate()` says so in the census.
 
 Every script resolves the dictionary once when it imports `config`, then calls `config.validate()`:
 - which fails with a list of problems before any work starts, and prints the cohort census (how many
@@ -207,14 +246,17 @@ Outputs: `depth/<animal>.npz`, `qc/<animal>_native_depth.png`.
 Statistics and figures:
 
 - **absolute** — integrated signal in the surface (0–0.5 mm) and deep (> 0.5 mm) compartments,
-  compared between groups. One-way Type II ANOVA of treatment per tracer × region, then Tukey
-  post-hoc (statsmodels + pingouin, reporting Hedges' g).
+  compared between groups. Type II ANOVA per tracer × region, then Tukey post-hoc (statsmodels +
+  pingouin, reporting Hedges' g). For a single-factor cohort that ANOVA has one term; for a factorial
+  one it is `~ factor1 * factor2`, fitting both main effects and the interaction, and the table gains
+  a `term` column saying which is which.
 - **relative** — the fraction of each animal's signal that is deep, i.e. the penetration question.
 - **agreement** — per-animal correlation against the second modality, if configured.
 
-Outputs in `outputs/`: `native_depth_per_animal.csv`, `native_depth_anova.csv`,
-`native_depth_posthoc_tukey.csv`, and the correlation tables. Figures in `figures/`:
-`native_depth_profiles.png`, `native_depth_headline.png`, `native_vs_ivis.png`,
+Outputs in `outputs/`: `native_depth_per_animal.csv` (with one column per factor), `native_depth_anova.csv`
+(one row per tracer × region × measure × term), `native_depth_posthoc_tukey.csv`, and the correlation
+tables. Figures in `figures/`: `native_depth_profiles.png`, `native_depth_headline.png`,
+`native_depth_interaction.png` (factorial cohorts only), `native_vs_ivis.png`,
 `native_vs_ivis_average.png`.
 
 ### 5. `05_atlas_space.py`
@@ -278,11 +320,24 @@ what 05 saves them for. The surface/deep statistics in 04 come from native space
 - **Multiplicity.** Two tracers × two regions × (number of groups − 1) comparisons. Our headline
   p-values were 0.03–0.05 uncorrected and would not survive Bonferroni across the whole family; the
   case rested on the direction being predicted in advance by an independent modality, and on the two
-  modalities agreeing animal by animal.
+  modalities agreeing animal by animal. A factorial cohort multiplies this: three model terms and four
+  simple effects, per tracer × region, is 28 tests rather than 12 - and 28 draws from a uniform p
+  distribution produce one below 0.05 all by themselves. Decide the claim before the run and report
+  the interaction, or one named contrast, as the test; the rest is a follow-up set and has to be read
+  as one.
+- **Light phase is a clock time, not just a label.** An animal dosed and imaged in its Lights ON period
+  is in a different circadian and arousal state from one in Lights OFF, and glymphatic clearance
+  depends on both. That is the point of the factor, but it has two consequences: an ON vs OFF
+  difference has a physiological explanation that does not involve the compound at all, and the phase
+  cannot be randomised away the way a drug arm can, because the phase is when the animal was awake.
+  What randomisation still buys is balance *within* each phase - drug arms and imaging days spread
+  across the batch - and the interaction term is what asks whether the drug's effect depends on the
+  phase.
 - **Batch effects show up here.** Absolute intensity is sensitive to acquisition conditions. In our
   cohort one dose group was run months after the others and had a visibly different background, and
   an ANOVA can come out significant because of that group alone — check the post-hoc to see which
-  pair is driving it, rather than reading the ANOVA p on its own.
+  pair is driving it, rather than reading the ANOVA p on its own. This matters more, not less, with
+  two factors: a phase that was imaged in one block is a batch difference wearing a factor's name.
 
 ## What is deliberately not here
 

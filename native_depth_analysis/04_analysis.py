@@ -17,11 +17,19 @@ Primary measure is the **thresholded** sum: voxels above that animal's fixed thr
 (raw - background). The all-voxel sum is kept for depths inside the brain only, because outside the
 surface it is dominated by non-tissue voxels sitting far below the tissue background.
 
+A factorial dataset (config.FACTOR_COLUMNS with more than one column) turns the statistics into a
+two-way model - each factor and their interaction - because a one-way test over four cells answers
+neither "does the drug work" nor "does it work differently in the two light phases", and the second
+of those is usually the reason the design has four cells. The groups are still four cells for the
+figures and the census; only the model changes. The Tukey pairs come from config.CONTRASTS, which a
+factorial dataset is expected to spell out as the four simple effects.
+
 Run (after native_depth.py):  python native_depth_analysis.py
 """
 import argparse
 import itertools
 import os
+import re
 
 import numpy as np
 import pandas as pd
@@ -39,6 +47,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # default argument: both would freeze the dataset that was configured first.
 
 
+def term_label(term):
+    """A model term as a person reads it: C(drug):C(light) -> drug:light."""
+    return re.sub(r'C\(([^)]+)\)', r'\1', str(term))
+
+
 # pingouin's output column names, and what this version of pingouin might call them instead. Only
 # the display and the p-value lookup depend on these, but both are load-bearing.
 TUKEY_COLUMNS = {'mean(A)': ('mean(A)', 'mean_A'), 'mean(B)': ('mean(B)', 'mean_B'),
@@ -51,7 +64,15 @@ def short(treatment):
 
 
 def load():
-    """Per animal x tracer x side: band sums, from the depth histograms."""
+    """Per animal x tracer x side: band sums, from the depth histograms.
+
+    The animal's group comes from the data map, not from the group recorded inside its depth profile.
+    A profile carries whichever group it was written with, so reading that back would make a
+    relabelled cohort - or one whose factors are declared differently - either fail or, worse, mix
+    two labellings in one figure. Which animals were compared is a design fact, and it is the data
+    map that states it. Profiles that record something else are reported, because that is evidence
+    they were written under an earlier labelling.
+    """
     listed = sorted([f[:-4] for f in os.listdir(config.DEPTH_DIR) if f.endswith('.npz')],
                     key=config.sort_key)
     # Same rule as 03: a depth profile for an animal this cohort excludes must not reach the
@@ -60,12 +81,15 @@ def load():
     animals = [a for a in listed if a not in excluded]
     if excluded:
         print(f'note: ignoring {excluded}: excluded for {config.DATASET_NAME}\n')
-    rows, profiles = [], {}
+    rows, profiles, relabelled = [], {}, []
     for animal in animals:
         data = np.load(os.path.join(config.DEPTH_DIR, f'{animal}.npz'), allow_pickle=True)
         edges = data['edges']
         centres = (edges[:-1] + edges[1:]) / 2
-        treatment = str(data['treatment'])
+        treatment = config.treatment_of(animal)
+        recorded = str(data['treatment']) if 'treatment' in data else ''
+        if recorded and recorded != treatment:
+            relabelled.append((animal, recorded, treatment))
         for tracer, side in itertools.product(config.CHANNELS, config.SIDES):
             signal = data[f'{tracer}_{side}_sum_in_mask']
             voxels = data[f'{tracer}_{side}_n_voxels']
@@ -73,6 +97,10 @@ def load():
             row = {'animal': animal, 'treatment': treatment, 'tracer': tracer, 'side': side,
                    'background': float(data[f'{tracer}_background']),
                    'threshold': float(data[f'{tracer}_threshold'])}
+            # one column per factor, so the table says which cell each animal is and why - and so a
+            # figure can group by a factor without parsing the group name apart again
+            for column, level in config.factor_levels_of(treatment).items():
+                row.setdefault(column, level)
             for name, (lo, hi) in config.BANDS.items():
                 sel = (centres >= lo) & (centres < hi)
                 row[name] = float(signal[sel].sum())
@@ -81,25 +109,43 @@ def load():
             row['surface_per_voxel'] = (row['surface_0_500um'] / row['surface_0_500um_voxels']
                                         if row['surface_0_500um_voxels'] else np.nan)
             rows.append(row)
+    if relabelled:
+        animal, recorded, treatment = relabelled[0]
+        print(f'note: {len(relabelled)} depth profile(s) record a group other than the data map\'s '
+              f'(e.g. {animal}: recorded {recorded!r}, now {treatment!r}); analysed under the data '
+              f'map, which is where group membership lives\n')
     return pd.DataFrame(rows), profiles, centres
 
 
 def anova_and_posthoc(df, measures):
     """
-    One-way ANOVA of treatment on each measure, per tracer x region, then Tukey post-hoc.
+    ANOVA of the design on each measure, per tracer x region, then Tukey post-hoc.
 
-    Deliberately the same procedure as the IVIS analysis (`ivis_analysis_updated.ipynb`):
-    statsmodels Type II ANOVA on the raw values, then pingouin's pairwise Tukey, which reports the
-    group means, the difference, T, the Tukey-corrected p and Hedges' g. Keeping the two analyses on
-    the same statistical footing is the point - it is what makes the modalities comparable.
+    One factor column gives the one-way ANOVA of treatment this has always been. Two or more give a
+    two-way model with every interaction, Type II, because the question a factorial design exists to
+    ask - does this factor do the same thing at each level of the other - is a different question
+    from "do these four groups differ", and a one-way test cannot tell them apart: it reports the
+    pooled effect of the drug averaged over the light phases, which is exactly the number that goes
+    to zero when an effect is present in one phase and absent in the other.
+
+    Deliberately the same procedure as the second modality's analysis (`ivis_analysis_updated.ipynb`)
+    as far as it goes: statsmodels Type II ANOVA on the raw values, then pingouin's pairwise Tukey,
+    which reports the group means, the difference, T, the Tukey-corrected p and Hedges' g. Keeping
+    the two analyses on the same statistical footing is the point - it is what makes the modalities
+    comparable. The factor structure is the one place they differ, and 04 says so in its output.
     """
     import pingouin as pg
     import statsmodels.api as sm
     from statsmodels.formula.api import ols
 
+    formula = 'value ~ ' + ' * '.join(f'C({column})' for column in config.FACTOR_COLUMNS)
+    # the model's own terms have to survive the column subset, or patsy reports "name 'drug' is not
+    # defined", which says nothing about the table it was handed
+    keep = ['animal', 'treatment'] + [column for column in config.FACTOR_COLUMNS
+                                      if column != 'treatment']
     anova_rows, posthoc, skipped = [], [], []
     for tracer, side, measure in itertools.product(config.CHANNELS, config.SIDES, measures):
-        d = (df[(df['tracer'] == tracer) & (df['side'] == side)][['animal', 'treatment', measure]]
+        d = (df[(df['tracer'] == tracer) & (df['side'] == side)][keep + [measure]]
              .rename(columns={measure: 'value'}))
         values = d['value'].to_numpy(dtype=float)
         # A measure that is undefined, or identical for every animal, cannot go into an ANOVA and
@@ -112,14 +158,21 @@ def anova_and_posthoc(df, measures):
         if len(values) < 2 or np.std(values, ddof=1) == 0:
             skipped.append(f'{tracer}/{side}/{measure}: identical for every animal, nothing to test')
             continue
-        table = sm.stats.anova_lm(ols('value ~ C(treatment)', data=d).fit(), typ=2)
-        ss_between, ss_total = float(table['sum_sq'].iloc[0]), float(table['sum_sq'].sum())
-        anova_rows.append({'tracer': tracer, 'region': side, 'measure': measure,
-                           'F': float(table['F'].iloc[0]), 'p_anova': float(table['PR(>F)'].iloc[0]),
-                           'df_between': float(table['df'].iloc[0]), 'df_resid': float(table['df'].iloc[1]),
-                           'eta_sq': ss_between / ss_total if ss_total else np.nan,
-                           **{config.short(t): d.loc[d['treatment'] == t, 'value'].mean()
-                              for t in config.GROUP_ORDER}})
+        table = sm.stats.anova_lm(ols(formula, data=d).fit(), typ=2)
+        ss_resid = float(table['sum_sq'].get('Residual', np.nan))
+        df_resid = float(table['df'].get('Residual', np.nan))
+        means = {config.short(cell): d.loc[d['treatment'] == cell, 'value'].mean()
+                 for cell in config.GROUP_ORDER}
+        for term in [t for t in table.index if t != 'Residual']:
+            ss = float(table['sum_sq'][term])
+            anova_rows.append({'tracer': tracer, 'region': side, 'measure': measure,
+                               'term': term_label(term),
+                               'F': float(table['F'][term]), 'p_anova': float(table['PR(>F)'][term]),
+                               'df_between': float(table['df'][term]), 'df_resid': df_resid,
+                               # partial eta squared: for one factor this is the eta squared it has
+                               # always been, because the total is that term plus the residual
+                               'eta_sq': ss / (ss + ss_resid) if ss_resid else np.nan,
+                               **means})
         pairs = pg.pairwise_tukey(data=d, dv='value', between='treatment')
         pairs.insert(0, 'measure', measure)
         pairs.insert(0, 'region', side)
@@ -128,8 +181,31 @@ def anova_and_posthoc(df, measures):
     for note in skipped:
         print(f'note: skipped {note}')
     if not posthoc:
-        return pd.DataFrame(anova_rows), pd.DataFrame(columns=['tracer', 'region', 'measure', 'A', 'B'])
+        return (pd.DataFrame(anova_rows),
+                pd.DataFrame(columns=['tracer', 'region', 'measure', 'A', 'B']))
     return pd.DataFrame(anova_rows), pd.concat(posthoc, ignore_index=True)
+
+
+def anova_p(anova_table, tracer, side, measure, term=None):
+    """
+    The ANOVA p for one measure, and for one model term if asked.
+
+    A factorial design puts several rows under each (tracer, region, measure) - one per term - so a
+    caller that just takes the first row would silently report whichever term happened to be listed
+    first, which is a wrong number in a figure title rather than an error.
+    """
+    hit = anova_table[(anova_table['tracer'] == tracer) & (anova_table['region'] == side)
+                      & (anova_table['measure'] == measure)]
+    if term is not None and 'term' in hit.columns:
+        hit = hit[hit['term'] == term]
+    return float(hit['p_anova'].iloc[0]) if len(hit) else np.nan
+
+
+def terms_for(tracer, side, measure, anova_table):
+    """The model terms reported for one measure, in the order the ANOVA table lists them."""
+    hit = anova_table[(anova_table['tracer'] == tracer) & (anova_table['region'] == side)
+                      & (anova_table['measure'] == measure)]
+    return list(dict.fromkeys(hit['term'])) if 'term' in hit.columns else []
 
 
 def tukey_column(pairs, name):
@@ -273,16 +349,22 @@ def figures(df, profiles, centres, merged, correlations, anova_table, posthoc):
                 ax.text((x0 + x1) / 2, y + step * 0.22, mark, ha='center', va='bottom',
                         fontsize=12 if mark == '*' else 8.5, color='#222222')
             ax.set_ylim(0, top * 1.06 + len(config.CONTRASTS) * step + step * 0.6)
-            anova = anova_table[(anova_table['tracer'] == tracer) & (anova_table['region'] == side)
-                                & (anova_table['measure'] == measure)]
-            p_anova = float(anova['p_anova'].iloc[0]) if len(anova) else np.nan
+            terms = terms_for(tracer, side, measure, anova_table)
+            if len(terms) <= 1:
+                p_anova = anova_p(anova_table, tracer, side, measure)
+                subtitle = f'ANOVA p = {p_anova:.3f}'
+            else:
+                subtitle = '\n'.join([f'{term} p = {anova_p(anova_table, tracer, side, measure, term):.3f}'
+                                      for term in terms])
             ax.set_xticks(range(len(config.GROUP_ORDER)))
             ax.set_xticklabels([config.short(t) for t in config.GROUP_ORDER], fontsize=9)
-            ax.set_title(f'{tracer}, {side}\nANOVA p = {p_anova:.3f}', fontsize=10, loc='left')
+            ax.set_title(f'{tracer}, {side}\n{subtitle}', fontsize=10, loc='left')
             if col == 0:
                 ax.set_ylabel(label, fontsize=10)
             ax.spines[['top', 'right']].set_visible(False)
-    fig.suptitle('Integrated tracer signal by compartment: one-way ANOVA of treatment, Tukey post-hoc',
+    fig.suptitle('Integrated tracer signal by compartment: '
+                 + (f'{" x ".join(config.FACTOR_COLUMNS)} model, Tukey post-hoc'
+                    if len(config.FACTOR_COLUMNS) > 1 else 'one-way ANOVA of treatment, Tukey post-hoc'),
                  x=0.01, ha='left', fontsize=13)
     plt.tight_layout(rect=(0, 0, 1, 0.96))
     plt.savefig(os.path.join(config.FIG_DIR, 'native_depth_headline.png'), dpi=120)
@@ -331,6 +413,73 @@ def figures(df, profiles, centres, merged, correlations, anova_table, posthoc):
         plt.savefig(os.path.join(config.FIG_DIR, filename), dpi=120)
         plt.close(fig)
     print(f'wrote 4 figures to {config.FIG_DIR}')
+
+
+def interaction_figure(df, anova_table):
+    """
+    Cell means with the two factors on the two axes: the figure that shows an interaction.
+
+    The bar panels of native_depth_headline.png answer "do these cells differ"; this answers "does
+    the drug do the same thing in both light phases", which is the question the four cells were
+    bought for and the one an interaction term tests. Two lines that are parallel mean the effect of
+    the drug does not depend on the phase; a change of slope between the two lines is the effect
+    itself. Same measure and the same units as the bar panels, so the two figures read together.
+
+    Drawn only for a two-factor design. For a single-factor dataset there is no interaction to show,
+    and for three factors there is no one pair of axes that shows it.
+    """
+    factors = config.FACTOR_COLUMNS
+    if len(factors) != 2:
+        print(f'note: no interaction figure: it needs exactly 2 factor columns, this dataset has '
+              f'{len(factors)} ({factors})')
+        return
+    first, second = factors
+    missing = [column for column in factors if column not in df.columns]
+    if missing:
+        print(f'note: no interaction figure: {missing} not in the per-animal table')
+        return
+    measures = ((config.SURFACE_BAND, f'surface 0-{config.SURFACE_MM:g} mm'),
+                (config.DEEP_BAND, f'deep > {config.SURFACE_MM:g} mm'))
+    panels = list(itertools.product(config.CHANNELS, config.SIDES))
+    fig, axes = plt.subplots(len(measures), len(panels), figsize=(4.6 * len(panels), 4.2 * len(measures)),
+                             squeeze=False)
+    for row, (measure, description) in enumerate(measures):
+        for col, (tracer, side) in enumerate(panels):
+            ax = axes[row, col]
+            d = df[(df['tracer'] == tracer) & (df['side'] == side)]
+            xs = range(len(config.FACTOR_LEVELS[second]))
+            for first_level in config.FACTOR_LEVELS[first]:
+                # the cells of one level of the first factor, in the second factor's order: the
+                # colours come from those cells, so the arm keeps its colour across both phases
+                colors = [config.GROUP_COLORS[config.cell_name((first_level, second_level))]
+                          for second_level in config.FACTOR_LEVELS[second]]
+                means, sems = [], []
+                for x, (second_level, color) in enumerate(zip(config.FACTOR_LEVELS[second], colors)):
+                    values = d[(d[first] == first_level) & (d[second] == second_level)][measure]
+                    means.append(values.mean())
+                    sems.append(values.sem())
+                    ax.errorbar([x], [means[-1]], yerr=[sems[-1]], color=color, marker='o',
+                                capsize=4, markersize=6, linewidth=0, zorder=3)
+                ax.plot(xs, means, marker='o', color=colors[0], linewidth=2, label=first_level)
+            p_interaction = anova_p(anova_table, tracer, side, measure, f'{first}:{second}')
+            ax.set_xticks(list(xs))
+            ax.set_xticklabels(config.FACTOR_LEVELS[second], fontsize=9)
+            ax.set_title(f'{tracer}, {side}: {description}\n{first} x {second} interaction '
+                         f'p = {p_interaction:.3f}', fontsize=10, loc='left')
+            if col == 0:
+                ax.set_ylabel('integrated tracer signal', fontsize=10)
+            if row == len(measures) - 1:
+                ax.set_xlabel(second, fontsize=10)
+            if row == 0 and col == 0:
+                ax.legend(frameon=False, fontsize=9, title=first)
+            ax.spines[['top', 'right']].set_visible(False)
+    fig.suptitle(f'Does the {first} effect depend on {second}? (group mean ± SEM)',
+                 x=0.01, ha='left', fontsize=13)
+    plt.tight_layout(rect=(0, 0, 1, 0.95))
+    path = os.path.join(config.FIG_DIR, 'native_depth_interaction.png')
+    plt.savefig(path, dpi=120)
+    plt.close(fig)
+    print(f'wrote {path}')
 
 
 def check_depth_provenance():
@@ -388,7 +537,9 @@ def main():
     anova_table.to_csv(os.path.join(config.OUT_DIR, 'native_depth_anova.csv'), index=False)
     posthoc.to_csv(os.path.join(config.OUT_DIR, 'native_depth_posthoc_tukey.csv'), index=False)
     pd.set_option('display.width', 240)
-    print('\nOne-way ANOVA of treatment, per tracer x region (same procedure as the '
+    model = (f'{" x ".join(config.FACTOR_COLUMNS)} two-way ANOVA (Type II)'
+             if len(config.FACTOR_COLUMNS) > 1 else 'One-way ANOVA of treatment')
+    print(f'\n{model}, per tracer x region (the same procedure as the '
           f'{config.SECOND_MODALITY_NAME} analysis):')
     print(anova_table.to_string(index=False, float_format=lambda v: f'{v:.4g}'))
     compartments = posthoc[posthoc['measure'].isin([config.SURFACE_BAND, config.DEEP_BAND])]
@@ -412,6 +563,7 @@ def main():
         print(correlations.to_string(index=False, float_format=lambda v: f'{v:.3f}'))
 
     figures(df, profiles, centres, merged, correlations, anova_table, posthoc)
+    interaction_figure(df, anova_table)
     print(f'manifest: {config.write_manifest("04_analysis", {"animals_in_profiles": int(df["animal"].nunique())})}')
 
 

@@ -236,7 +236,6 @@ def main():
         return
 
     os.makedirs(config.DEPTH_DIR, exist_ok=True)
-    data_map = config.load_data_map()
     listed = sorted([f[:-4] for f in os.listdir(config.MASK_DIR) if f.endswith('.npz')],
                     key=config.sort_key)
     # A mask can outlive the animal's place in the cohort - written before it was excluded, or by a
@@ -254,7 +253,7 @@ def main():
     for animal in animals:
         t0 = time.time()
         profile = animal_profile(animal)
-        profile['treatment'] = str(data_map.loc[animal, 'treatment'])
+        profile['treatment'] = config.treatment_of(animal)
         np.savez_compressed(os.path.join(config.DEPTH_DIR, f'{animal}.npz'), **profile)
         print(f'{animal}: {time.time() - t0:.0f} s', flush=True)
     print(f'\nwrote {len(animals)} depth profiles to {config.DEPTH_DIR} '

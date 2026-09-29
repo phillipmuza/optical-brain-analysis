@@ -244,7 +244,6 @@ def main():
         return
 
     os.makedirs(config.MASK_DIR, exist_ok=True)
-    data_map = config.load_data_map()
     animals = config.animals()
     rows, start = [], time.time()
     for animal in animals:
@@ -256,7 +255,7 @@ def main():
                             packed=np.packbits(mask), shape=np.array(mask.shape),
                             threshold=np.float32(thresholds['otsu']),
                             dataset=config.DATASET_NAME, provenance=config.provenance())
-        rows.append({'animal_number': animal, 'treatment': data_map.loc[animal, 'treatment'],
+        rows.append({'animal_number': animal, 'treatment': config.treatment_of(animal),
                      'threshold_otsu': thresholds['otsu'], 'volume_mm3': float(mask.sum()) * config.VOXEL_MM3})
         print(f'{animal}: volume {rows[-1]["volume_mm3"]:.0f} mm3, {time.time() - t0:.0f} s', flush=True)
         del image, mask

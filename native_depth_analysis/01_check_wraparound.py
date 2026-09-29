@@ -43,7 +43,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 def scan():
     """Per animal x channel: how many voxels wrapped, and what the extremes are."""
-    data_map = config.load_data_map()
     animals = config.animals()
     rows = []
     for animal in animals:
@@ -54,7 +53,7 @@ def scan():
             volume = tifffile.imread(path)
             negative = volume < 0
             n = int(negative.sum())
-            rows.append({'animal': animal, 'treatment': data_map.loc[animal, 'treatment'], 'channel': channel,
+            rows.append({'animal': animal, 'treatment': config.treatment_of(animal), 'channel': channel,
                          'dtype': str(volume.dtype), 'min': int(volume.min()), 'max': int(volume.max()),
                          'n_wrapped': n, 'ppm': 1e6 * n / volume.size,
                          'lost_signal_estimate': float(np.abs(volume[negative].astype(np.float64) + 65536).sum()) if n else 0.0,

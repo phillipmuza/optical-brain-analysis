@@ -15,8 +15,14 @@ One dataset at a time: to run another, edit DATASET, or keep a copy of this file
 are namespaced by the dataset's name under results/<name>/, because animal ids repeat across datasets
 (both series run an17) and a shared results directory would half-overwrite. Set NATIVE_DEPTH_RESULTS
 to one exact directory to override, which is how you point step 04 at results computed earlier.
+
+A group is a combination of factor levels, not one column value. By default a group is one value of
+the treatment column, which is the ordinary case and is unchanged. Name two factor_columns and a
+group becomes a cell of the cross: a 2x2 of drug x light phase is four cells, one per combination,
+and step 04 then models the two factors and their interaction instead of one pooled effect.
 """
 import hashlib
+import itertools
 import json
 import os
 import re
@@ -36,7 +42,18 @@ SIDES = ['dorsal', 'ventral']
 VOXEL_UM = 20.0                              # isotropic voxel size of the downsampled images
 
 ANIMAL_COLUMN = 'blinded_number'         # column in the data map holding the animal id
-TREATMENT_COLUMN = 'treatment'           # column in the data map holding the group
+TREATMENT_COLUMN = 'treatment'           # the default factor column, and the name the group column
+                                         # takes in the pipeline's own tables (see factor_columns)
+
+# A group is the combination of one level from each factor column, named by joining the levels with
+# FACTOR_SEPARATOR. One factor column is the default and the ordinary case: the group names are that
+# column's values, exactly as before. Two make a factorial design - a 2x2 of drug x light phase is
+# four cells, named 'Vehicle x LightsON' and so on, and step 04 tests both factors and the
+# interaction between them rather than one pooled effect over four groups.
+FACTOR_SEPARATOR = ' x '
+# A cell with fewer animals than this cannot carry an interaction term and its mean is a coin toss,
+# so validate() warns rather than stopping: a small cell is a design decision, not a config error.
+CELL_N_WARN = 3
 
 K_MAD = 5.0                   # tracer threshold = background + K_MAD robust SDs, per animal per channel
 TISSUE_K = 2.0                # 05: tissue = registration image above background by TISSUE_K robust SDs
@@ -69,11 +86,25 @@ ATLAS_ANNOTATION_DEFAULT = r'C:\Users\skgtpm1\.brainglobe\perens_lsfm_mouse_20um
 # --- the one dict: point this at a dataset ------------------------------------------------------
 # name                  namespaces the results directory, and is part of every file's provenance
 # data_dir              one folder per animal, each with downsampled/<channel>.tif as above
-# data_map              CSV with a column of animal ids (ANIMAL_COLUMN) and one of groups
+# data_map              CSV with a column of animal ids (ANIMAL_COLUMN) and one column per factor
+# factor_columns        the data map columns whose levels define a group, crossed in this order. One
+#                       column (the default, TREATMENT_COLUMN) is the ordinary single-factor case;
+#                       two make a factorial design and a group becomes a cell of the cross. A factor
+#                       column may not be called 'treatment' unless it is the only one, because
+#                       'treatment' is the name of the group column in steps 03-06's own tables.
+# factor_levels         {column: [level, ...]} - the declared levels, in figure order. Required when
+#                       there is more than one factor column, because step 04 needs to know which
+#                       levels to cross and in which order. A value in the data map that is not a
+#                       declared level is a config problem, not a new group.
 # second_modality_csv   the per-animal table to cross-validate against, or None
-# groups                the treatment groups, in figure order, as name (must match the data map
-#                       exactly), label (compact axis label) and color; the first is not special,
-#                       reference_group names whichever one every contrast is tested against
+# groups                the groups, in figure order, as name (must match the data map exactly, or
+#                       the joined factor levels for a factorial design), label (compact axis label)
+#                       and color; the first is not special, reference_group names whichever one
+#                       every contrast is tested against
+# contrasts             optional: the pairs to test with Tukey post-hoc, as (group, reference group).
+#                       Defaults to every group against reference_group. A 2x2 usually wants all
+#                       four simple effects - each factor within each level of the other - spelled
+#                       out here instead of leaving the interaction to be inferred from the brackets.
 # exclude_animals       animals dropped everywhere; 03 and 04 also drop any left over from an
 #                       earlier run, so an exclusion added late still takes effect
 # example_animal        the animal the QC figures illustrate
@@ -121,6 +152,43 @@ ANAESTHETIC_DATASET = {
     'atlas_annotation': None,
 }
 
+# The factorial series: two factors, so four cells, and step 04 fits a two-way model with the
+# interaction rather than one pooled effect. The data map needs the animal column, a 'drug' column
+# (drug arm: the vehicle or the compound) and a 'light' column (which phase the animal was dosed and
+# imaged in). 'drug' rather than 'treatment' because that name is already taken by the group column
+# in steps 03-06's own tables. The four cell names below are the joined factor levels and must match
+# what validate() computes, character for character - including the spaces around the separator.
+# The colours put the two arms in the same colour on both phases and the two phases light/dark, and
+# the cells are ordered phase-major so the interaction reads down the figure as a change of slope.
+# contrasts lists all four simple effects: each factor within each level of the other. The
+# interaction term in step 04's table is the headline; these four are the follow-ups, and they are
+# 4 tests per tracer x region rather than the 1 a two-way ANOVA would give - see "Multiplicity" in
+# the README before reading a p-value here as the finding.
+DRUG_2X2_DATASET = {
+    'name': 'DRUG_2x2',
+    'data_dir': r'E:\tracer_uptake\atx_2x2\cleared_brains',           # TODO(confirm)
+    'data_map': r'E:\tracer_uptake\atx_2x2\data_map.csv',             # TODO(confirm)
+    'second_modality_csv': None,                  # TODO(confirm)
+    'factor_columns': ['drug', 'light'],
+    'factor_levels': {'drug': ['Vehicle', 'DRUG'],
+                      'light': ['LightsON', 'LightsOFF']},
+    'groups': [
+        {'name': 'Vehicle x LightsON',  'label': 'Veh ON',  'color': '#7f7f7f'},
+        {'name': 'DRUG x LightsON',     'label': 'Drug ON', 'color': '#4C72B0'},
+        {'name': 'Vehicle x LightsOFF', 'label': 'Veh OFF', 'color': '#b0b0b0'},
+        {'name': 'DRUG x LightsOFF',    'label': 'Drug OFF', 'color': '#C1666B'},
+    ],
+    'reference_group': 'Vehicle x LightsON',
+    'contrasts': [('DRUG x LightsON', 'Vehicle x LightsON'),
+                  ('DRUG x LightsOFF', 'Vehicle x LightsOFF'),
+                  ('Vehicle x LightsOFF', 'Vehicle x LightsON'),
+                  ('DRUG x LightsOFF', 'DRUG x LightsON')],
+    'exclude_animals': [],                        # TODO(confirm)
+    'example_animal': 'an1',                      # TODO(confirm)
+    'mask_channel_is_tracer': 'FITC',
+    'atlas_annotation': None,
+}
+
 # --- constants derived from the constants above -------------------------------------------------
 VOXEL_MM = VOXEL_UM / 1000
 VOXEL_MM3 = VOXEL_MM ** 3
@@ -153,6 +221,9 @@ ATLAS_ANNOTATION = ''
 ATLAS_SPACE_DIR = THRESHOLD_SUMMARY = ''
 MASK_CHANNEL_IS_TRACER = ''
 EXAMPLE_ANIMAL = ''
+FACTOR_COLUMNS = []
+FACTOR_LEVELS = {}
+CELLS = []
 GROUPS = []
 GROUP_ORDER = []
 GROUP_COLORS = {}
@@ -163,6 +234,29 @@ EXCLUDE_ANIMALS = []
 RESULTS_DIR = FIG_DIR = MASK_DIR = DEPTH_DIR = OUT_DIR = QC_DIR = ''
 
 _data_map_cache = None
+_cell_cache = {}
+
+
+def cell_name(levels):
+    """
+    The name of a group: one level per factor column, joined by FACTOR_SEPARATOR.
+
+    Always built from the levels rather than typed, which is what makes factor_levels_of() below an
+    exact inverse: a 2x2's cell names cannot drift out of step with its factors. For the ordinary
+    single-factor dataset this is the value of the treatment column, unchanged.
+    """
+    return FACTOR_SEPARATOR.join(str(level) for level in levels)
+
+
+def factor_levels_of(group):
+    """{factor column: level} for a group name built by cell_name()."""
+    levels = str(group).split(FACTOR_SEPARATOR)
+    if len(levels) != len(FACTOR_COLUMNS):
+        raise SystemExit(f'group name {group!r} is not {len(FACTOR_COLUMNS)} factor level(s) joined '
+                         f'by {FACTOR_SEPARATOR!r}, so it cannot be placed in the design '
+                         f'{" x ".join(FACTOR_COLUMNS)}. Group names come from cell_name(); a '
+                         f'hand-typed one has to match it exactly.')
+    return dict(zip(FACTOR_COLUMNS, levels))
 
 
 def resolve():
@@ -178,7 +272,8 @@ def resolve():
     global ATLAS_ANNOTATION, MASK_CHANNEL_IS_TRACER, EXAMPLE_ANIMAL
     global GROUP_ORDER, GROUP_COLORS, SHORT_LABELS, REFERENCE_GROUP, CONTRASTS, EXCLUDE_ANIMALS
     global RESULTS_DIR, FIG_DIR, MASK_DIR, DEPTH_DIR, OUT_DIR, QC_DIR
-    global ATLAS_SPACE_DIR, THRESHOLD_SUMMARY, _data_map_cache
+    global ATLAS_SPACE_DIR, THRESHOLD_SUMMARY, _data_map_cache, _cell_cache
+    global FACTOR_COLUMNS, FACTOR_LEVELS, CELLS
 
     spec = DATASET
     DATASET_NAME = spec['name']
@@ -187,7 +282,30 @@ def resolve():
     GROUP_COLORS = {g['name']: g['color'] for g in GROUPS}
     SHORT_LABELS = {g['name']: g['label'] for g in GROUPS if g['label'] != g['name']}
     REFERENCE_GROUP = spec['reference_group']
-    CONTRASTS = [(g, REFERENCE_GROUP) for g in GROUP_ORDER if g != REFERENCE_GROUP]
+
+    # The factor structure. One factor column is the ordinary case: the groups are that column's
+    # values, in the order DATASET lists them, exactly as before this existed. Two make a factorial
+    # design, and the groups are its cells - one per combination - in the declared level order.
+    # A missing factor_levels entry yields no cells rather than a traceback, because resolve() runs
+    # at import of every script and a config problem belongs in validate()'s list.
+    FACTOR_COLUMNS = list(spec.get('factor_columns') or [TREATMENT_COLUMN])
+    declared_levels = spec.get('factor_levels') or {}
+    # str() everywhere: a data map may hold an integer level (0/1, a dose, an animal group number),
+    # and the group name is a joined string, so comparing a level against the cells is a string
+    # comparison whether the column is numeric or not
+    FACTOR_LEVELS = {column: [str(level) for level in declared_levels[column]]
+                     if declared_levels.get(column)
+                     else (list(GROUP_ORDER) if len(FACTOR_COLUMNS) == 1 else [])
+                     for column in FACTOR_COLUMNS}
+    CELLS = ([cell_name(levels) for levels in itertools.product(
+                *(FACTOR_LEVELS[column] for column in FACTOR_COLUMNS))]
+             if all(FACTOR_LEVELS.values()) else [])
+
+    # The pairs to test with Tukey. A factorial design names its own, because testing each of four
+    # cells against one reference is not the same set of questions as the four simple effects.
+    CONTRASTS = ([tuple(pair) for pair in spec['contrasts']] if spec.get('contrasts')
+                 else [(g, REFERENCE_GROUP) for g in GROUP_ORDER if g != REFERENCE_GROUP])
+
     EXCLUDE_ANIMALS = list(spec['exclude_animals'])
     DATA_DIR = spec['data_dir']
     DATA_MAP = spec['data_map']
@@ -197,6 +315,7 @@ def resolve():
     MASK_CHANNEL_IS_TRACER = spec.get('mask_channel_is_tracer') or ''
     EXAMPLE_ANIMAL = spec['example_animal']
     _data_map_cache = None
+    _cell_cache.clear()
 
     # an explicit override points at one exact directory (results computed earlier); otherwise the
     # dataset gets its own namespace, because animal ids repeat between datasets
@@ -240,8 +359,20 @@ def load_data_map():
 
 
 def treatment_of(animal):
-    """The group string the data map gives an animal."""
-    return str(load_data_map().loc[animal, 'treatment'])
+    """
+    The group an animal belongs to.
+
+    For the ordinary single-factor dataset that is the value of the treatment column, exactly as
+    before. For a factorial dataset it is the cell: the animal's level in each factor column, joined
+    by FACTOR_SEPARATOR. Either way it is the pipeline's one answer to "which group is this animal
+    in", and it is read from the data map rather than the group recorded inside a depth profile - a
+    group is which animals were compared, not how one was measured, so relabelling must not require
+    the measurement to be recomputed.
+    """
+    if animal not in _cell_cache:
+        row = load_data_map().loc[animal]
+        _cell_cache[animal] = cell_name(row[column] for column in FACTOR_COLUMNS)
+    return _cell_cache[animal]
 
 
 def animals(with_images=True):
@@ -295,6 +426,10 @@ def provenance():
     how one is measured, so changing them must not invalidate profiles that are still correct - 03
     and 04 drop excluded animals at read time instead. Adding either would force a 90-minute re-run
     for a change that alters no number.
+
+    The group names and the factor structure are absent for the same reason: relabelling a group, or
+    moving an animal into another cell of a factorial design, changes which animals are compared and
+    not how any of them was measured, so it must not invalidate profiles that are still correct.
     """
     material = json.dumps({'dataset': DATASET_NAME, 'channels': CHANNELS, 'sides': SIDES,
                            'voxel_um': VOXEL_UM, 'mask_closing_vox': MASK_CLOSING_VOX,
@@ -342,7 +477,9 @@ def describe():
         f'second modality {SECOND_MODALITY_CSV or "(none configured)"}',
         f'atlas           {ATLAS} at {ATLAS_VOXEL_UM:g} um, binned x{ATLAS_BIN} for display',
         f'voxel           {VOXEL_UM:g} um isotropic',
+        f'factors         {" x ".join(FACTOR_COLUMNS)} -> {len(CELLS)} cell(s)',
         'groups          ' + ', '.join(f'{g["name"]} [{g["label"]}]' for g in GROUPS),
+        f'contrasts       ' + ', '.join(f'{a} vs {b}' for a, b in CONTRASTS),
         f'reference       {REFERENCE_GROUP}',
         f'excluded        {", ".join(EXCLUDE_ANIMALS) if EXCLUDE_ANIMALS else "(none)"}',
         f'surface band    {SURFACE_BAND} (0-{SURFACE_MM:g} mm), deep {DEEP_BAND}',
@@ -392,9 +529,43 @@ def validate():
 
     # the data map's own column names, before the rename above made the check vacuous
     raw_columns = pd.read_csv(DATA_MAP, encoding='utf-8-sig', nrows=0).columns
-    for role, column in (('animal id', ANIMAL_COLUMN), ('treatment', TREATMENT_COLUMN)):
+    roles = [('animal id', ANIMAL_COLUMN)] + [('factor', column) for column in FACTOR_COLUMNS]
+    for role, column in roles:
         if column not in raw_columns:
             problems.append(f'data map has no {role} column {column!r}; it has: {list(raw_columns)}')
+
+    # The factor structure. All of this is checkable without any image, so it is checked before the
+    # census: a design that cannot be crossed is not something to discover from a figure.
+    if len(FACTOR_COLUMNS) > 1 and TREATMENT_COLUMN in FACTOR_COLUMNS:
+        problems.append(f"factor_columns may not include {TREATMENT_COLUMN!r} when there is more than "
+                        f'one factor: that name is the group column in the pipeline\'s own tables, '
+                        f'which the cell goes in. Rename the factor, or declare it the only one. '
+                        f'Declared: {FACTOR_COLUMNS}')
+    for column in FACTOR_COLUMNS:
+        if not FACTOR_LEVELS.get(column):
+            problems.append(f'factor_levels declares no levels for {column!r}, so the '
+                            f'{len(FACTOR_COLUMNS)}-factor design cannot be crossed: add '
+                            f"factor_levels = {{{column!r}: [...]}} to DATASET")
+        # a level containing the separator would make the group name ambiguous: 'A x B' could be the
+        # level 'A x B' of one factor or the cell (A, B) of two, and factor_levels_of() splits on it
+        clashing = [level for level in FACTOR_LEVELS.get(column, []) if FACTOR_SEPARATOR in level]
+        if clashing:
+            problems.append(f'{column} level(s) containing the factor separator {FACTOR_SEPARATOR!r}: '
+                            f'{clashing}. The group name is built by joining levels with it, so a '
+                            f'level must not contain it.')
+    if len(FACTOR_COLUMNS) > 1 and CELLS:
+        not_a_cell = [g for g in GROUP_ORDER if g not in CELLS]
+        no_group = [c for c in CELLS if c not in GROUP_ORDER]
+        if not_a_cell:
+            problems.append(f'group(s) that are not a combination of {" x ".join(FACTOR_COLUMNS)}: '
+                            f'{not_a_cell}; the combinations are {CELLS}')
+        if no_group:
+            problems.append(f'no group entry in DATASET for these combinations of '
+                            f'{" x ".join(FACTOR_COLUMNS)}: {no_group}')
+    for pair in CONTRASTS:
+        for group in pair:
+            if group not in GROUP_ORDER:
+                problems.append(f'contrast {pair} names {group!r}, which is not one of {GROUP_ORDER}')
     if problems:
         raise SystemExit('config problems:\n  - ' + '\n  - '.join(problems))
 
@@ -421,6 +592,31 @@ def validate():
         if not group_members(treatment, strict=False):
             problems.append(f'group {treatment!r} has no animals (after exclusions)')
 
+    # Levels that appear in the data map but not in the declared design. The failure this catches is
+    # a typo or an animal from another cohort, either of which would otherwise become a group of its
+    # own in one figure and vanish from the next.
+    table = load_data_map()
+    for column in FACTOR_COLUMNS:
+        levels = FACTOR_LEVELS.get(column) or []
+        observed = [str(value) for value in table[column]]
+        undeclared = sorted({value for value in observed if value not in levels})
+        if undeclared:
+            who = [str(a) for a in table.index if str(table.loc[a, column]) in undeclared]
+            problems.append(f'{column} values in the data map that are not declared levels: '
+                            f'{undeclared} (animals {who}); the declared levels are {levels}')
+
+    # A cell too small to carry the interaction the design is for. Only meaningful when an
+    # interaction is actually fitted, which is to say when there is more than one factor column: for a
+    # single-factor cohort the census below already prints the group sizes, and n per group is a
+    # reader's judgement rather than a warning about a specific term. A design decision, not a config
+    # error, so a warning - but it decides whether the interaction term in 04 means anything.
+    if len(FACTOR_COLUMNS) > 1:
+        for cell in GROUP_ORDER:
+            n = len(group_members(cell, strict=False))
+            if 0 < n < CELL_N_WARN:
+                warnings.append(f'group {cell!r} has only {n} animal(s): too few to support a factor '
+                                f'interaction, and its mean is not to be trusted')
+
     if problems:
         raise SystemExit('config problems:\n  - ' + '\n  - '.join(problems))
 
@@ -428,6 +624,18 @@ def validate():
     notes = [f'note: {treatment} n={len(group_members(treatment, strict=False))}'
              for treatment in GROUP_ORDER]
     notes.append(f'note: {len(animals())} animals in total, {len(EXCLUDE_ANIMALS)} excluded')
+    if len(FACTOR_COLUMNS) > 1:
+        # the marginal counts, which is what an unbalanced factorial shows up in: a cell can be the
+        # right size while one level of a factor is short
+        for column in FACTOR_COLUMNS:
+            counts = ', '.join(
+                f'{level} n={sum(1 for a in animals() if factor_levels_of(treatment_of(a))[column] == level)}'
+                for level in FACTOR_LEVELS[column])
+            notes.append(f'note: {column}: {counts}')
+        known = {str(a) for a in table.index}
+        dropped = [a for a in EXCLUDE_ANIMALS if str(a) in known]
+        if dropped:
+            notes.append('note: excluded ' + ', '.join(f'{a} ({treatment_of(a)})' for a in dropped))
     return notes + [f'warning: {w}' for w in warnings]
 
 

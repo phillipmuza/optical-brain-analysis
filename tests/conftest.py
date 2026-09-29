@@ -45,6 +45,36 @@ def synthetic_cohort_fixture(tmp_path, monkeypatch):
     yield data_dir, data_map, animals
     config.resolve()          # put the real dataset back for anything that runs after this fixture
 
+
+@pytest.fixture
+def factorial_cohort_fixture(tmp_path, monkeypatch):
+    """
+    Point config.DATASET at a fabricated 2x2 dataset: two factor columns instead of a treatment
+    column, four cells, and the four simple effects named as the contrasts.
+
+    Results are redirected to tmp_path as in the fixture above, so nothing lands in the package
+    directory. The contrasts are built here from the same cell names the entry uses, so a design whose
+    four simple effects are spelled out is exercised rather than a default that happens to work.
+    """
+    import synthetic_cohort
+    import config
+
+    cells = synthetic_cohort.FACTORIAL_CELLS
+    data_dir, data_map, animals = synthetic_cohort.build_factorial_cohort(tmp_path, cells)
+    names = [config.cell_name((first, second)) for first, second, _ in cells]
+    # cells are declared (vehicle, drug) x (ON, OFF), so names[1] is DRUG x LightsON and so on
+    contrasts = [(names[1], names[0]),     # drug within LightsON
+                 (names[3], names[2]),     # drug within LightsOFF
+                 (names[2], names[0]),     # light within vehicle
+                 (names[3], names[1])]     # light within the drug arm
+    monkeypatch.setenv('NATIVE_DEPTH_RESULTS', str(tmp_path / 'results'))
+    monkeypatch.setattr(config, 'DATASET', synthetic_cohort.factorial_dataset_entry(
+        data_dir, data_map, cells, contrasts=contrasts))
+    config.resolve()
+    yield data_dir, data_map, animals
+    config.resolve()
+
+
 # Two real atlas IDs standing in for "region A" (cortex-like block) and "region B".
 REGION_A = 9
 REGION_B = 653

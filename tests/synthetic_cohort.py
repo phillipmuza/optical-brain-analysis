@@ -125,6 +125,24 @@ def write_atlas_annotation(root, shape=SHAPE, radius=26.0):
 
 DEFAULT_GROUPS = (("Vehicle", 2), ("Medetomidine", 2), ("K/X", 2))
 
+# A 2x2: first factor level, second factor level, animals per cell. Balanced, and big enough that
+# the four cells can carry an interaction term in the statistics.
+FACTORIAL_CELLS = (('Vehicle', 'LightsON', 2), ('DRUG', 'LightsON', 2),
+                   ('Vehicle', 'LightsOFF', 2), ('DRUG', 'LightsOFF', 2))
+
+
+def _write_animal(data_dir, animal, index, seed=0):
+    """One animal's downsampled/ directory: the three files every cohort builder needs."""
+    animal_dir = data_dir / animal / 'downsampled'
+    animal_dir.mkdir(parents=True, exist_ok=True)
+    fitc = synthetic_image(index, 0, seed=seed)
+    txr = synthetic_image(index, 1, seed=seed)
+    tifffile.imwrite(animal_dir / 'fitc.tif', fitc)
+    tifffile.imwrite(animal_dir / 'txr.tif', txr)
+    # a copy on disk, not a symlink: the pipeline reads it as its own file
+    tifffile.imwrite(animal_dir / 'registration.tif', fitc)
+    write_registration(data_dir / animal)
+
 
 def build_cohort(root, groups=DEFAULT_GROUPS, seed=0):
     """
@@ -140,17 +158,32 @@ def build_cohort(root, groups=DEFAULT_GROUPS, seed=0):
         for _ in range(count):
             index += 1
             animal = f'an{index}'
-            animal_dir = data_dir / animal / 'downsampled'
-            animal_dir.mkdir(parents=True, exist_ok=True)
-            fitc = synthetic_image(index, 0, seed=seed)
-            txr = synthetic_image(index, 1, seed=seed)
-            tifffile.imwrite(animal_dir / 'fitc.tif', fitc)
-            tifffile.imwrite(animal_dir / 'txr.tif', txr)
-            # a copy on disk, not a symlink: the pipeline reads it as its own file
-            tifffile.imwrite(animal_dir / 'registration.tif', fitc)
-            write_registration(data_dir / animal)
+            _write_animal(data_dir, animal, index, seed)
             animals.append(animal)
             rows.append({'blinded_number': animal, 'treatment': group})
+    data_map = root / 'data_map.csv'
+    pd.DataFrame(rows).to_csv(data_map, index=False)
+    return data_dir, data_map, animals
+
+
+def build_factorial_cohort(root, cells=FACTORIAL_CELLS, factor_columns=('drug', 'light'), seed=0):
+    """
+    Write a factorial cohort: the same images, but the data map carries one column per factor
+    instead of a single treatment column.
+
+    `cells` is a sequence of (first factor level, second factor level, count), so an unbalanced or
+    an under-populated cell can be built deliberately - the counts are read off the data map.
+    """
+    data_dir = root / 'cleared_brains'
+    animals, rows = [], []
+    index = 0
+    for first, second, count in cells:
+        for _ in range(count):
+            index += 1
+            animal = f'an{index}'
+            _write_animal(data_dir, animal, index, seed)
+            animals.append(animal)
+            rows.append({'blinded_number': animal, factor_columns[0]: first, factor_columns[1]: second})
     data_map = root / 'data_map.csv'
     pd.DataFrame(rows).to_csv(data_map, index=False)
     return data_dir, data_map, animals
@@ -171,6 +204,42 @@ def dataset_entry(data_dir, data_map, groups=DEFAULT_GROUPS, name='synthetic', a
         'exclude_animals': [],
         'example_animal': 'an1',
     }
+    if atlas_annotation is not None:
+        entry['atlas_annotation'] = str(atlas_annotation)
+    return entry
+
+
+def factorial_dataset_entry(data_dir, data_map, cells=FACTORIAL_CELLS,
+                            factor_columns=('drug', 'light'), name='synthetic_2x2',
+                            contrasts=None, reference_group=None, atlas_annotation=None):
+    """
+    The config.DATASET value for a cohort built by build_factorial_cohort().
+
+    The cell names are built with config.cell_name(), so the fixture cannot agree with the pipeline
+    by luck: if the separator or the level order changed, the group names would stop matching what
+    validate() computes and every test here would fail.
+    """
+    import config
+
+    palette = ['#7f7f7f', '#4C72B0', '#b0b0b0', '#C1666B']
+    names = [config.cell_name((first, second)) for first, second, _ in cells]
+    entry = {
+        'name': name,
+        'data_dir': str(data_dir),
+        'data_map': str(data_map),
+        'second_modality_csv': None,
+        'mask_channel_is_tracer': 'FITC',
+        'factor_columns': list(factor_columns),
+        'factor_levels': {column: list(dict.fromkeys(cell[position] for cell in cells))
+                          for position, column in enumerate(factor_columns)},
+        'groups': [{'name': cell, 'label': cell, 'color': palette[k % len(palette)]}
+                   for k, cell in enumerate(names)],
+        'reference_group': reference_group or names[0],
+        'exclude_animals': [],
+        'example_animal': 'an1',
+    }
+    if contrasts is not None:
+        entry['contrasts'] = [tuple(pair) for pair in contrasts]
     if atlas_annotation is not None:
         entry['atlas_annotation'] = str(atlas_annotation)
     return entry
